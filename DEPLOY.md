@@ -359,12 +359,12 @@ Two Headscale users, created automatically:
 | User | Who | Allowed |
 | --- | --- | --- |
 | `Routers` | the sidecar in front of 9Router | nothing outbound |
-| `Devices` | your laptops and phones | `Routers` on `tcp/80`, nothing else |
+| `Devices` | your laptops and phones | `Routers` on `tcp/80`; ping between devices |
 
-Devices cannot see each other. That is a security property (a stolen laptop
-cannot reach your other machines through the mesh) and it is also what stops
-removed devices from lingering: a device's peer list only ever holds the
-router, which is never removed.
+Devices appear in each other's device list and can ping each other, but have no
+TCP or UDP between them, so a stolen laptop cannot reach your other machines
+through the mesh. Every peer list also always contains the router, which is
+never removed, so a removed device is always delivered as a removal.
 
 ## C1. DNS and domain
 
@@ -411,18 +411,21 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://headscale.yourdomain.com/healt
 
 ## C3. Enroll a device
 
-Open the `headscale` container log in Dokploy and copy the printed command:
+Tailscale apps (macOS, Windows, Android, iOS):
 
-```bash
-tailscale up --login-server=https://headscale.yourdomain.com \
-  --accept-dns=false --auth-key=hskey-auth-...
-```
+1. Point the app at `https://headscale.yourdomain.com` as a custom login
+   server.
+2. It opens a browser page with `headscale auth register --auth-id ... --user USERNAME`.
+3. Run that in the `headscale` container's **Terminal** in Dokploy, with
+   `--user Devices`.
 
-`--accept-dns=false` leaves your system DNS alone. On macOS and Windows GUI
-clients, add the login server under the app's account menu, then paste the key
-when asked. Each key enrolls exactly one device and expires after an hour; for
-the next device, redeploy with `DEVICE_KEY=true` again. When you are done,
-clear `DEVICE_KEY` and redeploy, so a fresh key is not printed on every start.
+CLI clients can do the same with `tailscale up --login-server=... --accept-dns=false`,
+or use a pre-auth key: set `DEVICE_KEY=true`, redeploy, and run the
+`tailscale up ... --auth-key=...` line printed in the `headscale` log. Each key
+enrolls one device and expires after an hour. Clear `DEVICE_KEY` afterwards so
+a key is not printed on every start.
+
+Always use `--user Devices`; a node under any other user has no access.
 
 The router is the first node registered, so its address is normally
 `100.64.0.1`. `tailscale status` on the device shows it as `9router`.

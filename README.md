@@ -114,8 +114,8 @@ DERP relay sit behind Traefik on `headscale.yourdomain.com`, so everything a
 client sends is HTTPS on 443 (Cloudflare's proxy in front is fine). A Tailscale
 sidecar joins as the `Routers` user and forwards port 80 to 9Router over the
 stack's private Docker bridge. Your
-devices join as `Devices`, which may reach the router on port 80 and nothing
-else. Reachable at `http://100.64.0.1` from your devices.
+devices join as `Devices`, which may reach the router on port 80 and ping each
+other, nothing more. Reachable at `http://100.64.0.1` from your devices.
 
 ```
 device ──HTTPS 443 (DERP)──> [headscale] ──> [sidecar :80] ──bridge──> [9router :20128] ──> [headroom :8787]
@@ -527,11 +527,12 @@ rather than per-machine SSH tunnels, over nothing but HTTPS.
 
 - Two Headscale users. `Routers` holds the 9Router sidecar, `Devices` holds
   your machines. The access policy allows `Devices` to reach `Routers` on
-  `tcp/80` and nothing else. Devices cannot see each other, and the router
-  cannot open connections to your devices.
-- Keys are single-use and expire after one hour. The router's key is passed
-  over a private volume and never printed. A device key is printed only when
-  you ask for one.
+  `tcp/80`, and allows devices to ping each other so every device shows the
+  full list. There is no TCP or UDP between devices, and the router cannot
+  open connections to your devices.
+- The router's key is single-use, expires after one hour, is passed over a
+  private volume and is never printed. Devices are approved one at a time by
+  you, from the Headscale container.
 - Every image is pinned. The deploy refuses to start without `JWT_SECRET`,
   `INITIAL_PASSWORD`, and `HEADSCALE_DOMAIN`.
 - UDP is never used. Control traffic and the DERP relay both travel as HTTPS on
@@ -574,42 +575,50 @@ certificate in Dokploy and leave `CERT_RESOLVER` empty. With DNS only, set
 | `INITIAL_PASSWORD` | The base64 string from `openssl rand -base64 24` | Yes |
 | `HEADSCALE_DOMAIN` | `headscale.yourdomain.com` | Yes |
 | `CERT_RESOLVER` | Empty for an uploaded certificate, `letsencrypt` for ACME | No |
-| `DEVICE_KEY` | `true` while you enroll a device, then remove it | No |
+| `DEVICE_KEY` | `true` only to print a CLI enrollment key, then remove it | No |
 | `DELETE_NODE_IDS` | Node IDs to delete, space-separated, then remove it | No |
 
 ### Step 4: Deploy
 
-1. Set `DEVICE_KEY=true` and click **Deploy**.
-2. Open the `headscale` container logs. You will see:
+Click **Deploy**, then open the `headscale` container logs. The node list at
+the end shows the router as node 1 under `Routers`:
 
-   ```
-   ========================================
-   Single-use device key, valid 1 hour:
-     tailscale up --login-server=https://headscale.yourdomain.com --accept-dns=false --auth-key=hskey-auth-...
-   Clear DEVICE_KEY in Dokploy when done.
-   ========================================
-   ID | Hostname | Name    | ... | User    | ...
-   1  | 9router  | 9router | ... | Routers | ...
-   ```
-
-   The router appears as node 1 under `Routers` a few seconds after the
-   deploy finishes.
+```
+ID | Hostname | Name    | ... | User    | ...
+1  | 9router  | 9router | ... | Routers | ...
+```
 
 ### Step 5: Enroll a device
 
-On the device, run the printed command. `--accept-dns=false` leaves your system
-DNS untouched; only the mesh range goes through Tailscale. On the macOS and
-Windows apps, add the login server from the account menu and paste the key.
+**Tailscale app (macOS, Windows, Android, iOS):**
+
+1. In the app, choose to use a custom login server (on Android: account
+   menu, then change server) and enter `https://headscale.yourdomain.com`.
+2. The app opens a browser page showing a command like:
+
+   ```
+   headscale auth register --auth-id hskey-authreq-... --user USERNAME
+   ```
+
+3. In Dokploy, open the `headscale` container's **Terminal** and run that
+   command with `--user Devices`. The device joins immediately.
+
+**CLI (Linux, or macOS with the CLI):** the same flow works with
+`tailscale up --login-server=https://headscale.yourdomain.com --accept-dns=false`.
+Alternatively set `DEVICE_KEY=true`, redeploy, and run the `tailscale up ...
+--auth-key=...` line printed in the `headscale` log. Each printed key enrolls
+one device and expires in an hour. Remove `DEVICE_KEY` afterwards.
+
+Then, from the device:
 
 ```bash
-tailscale status              # 9router  100.64.0.1  Routers
+tailscale status              # 9router 100.64.0.1 Routers, plus your other devices
 curl -sS -o /dev/null -w '%{http_code}\n' http://100.64.0.1/v1/models
 # expect 401 (reachable, needs an API key)
 ```
 
-Each key enrolls one device and expires in an hour. For the next device,
-redeploy with `DEVICE_KEY=true` again. When all devices are in, remove
-`DEVICE_KEY` and redeploy.
+Always register devices under `Devices`. A device under any other user gets
+no access at all.
 
 ### Step 6: Remove a device
 
@@ -624,8 +633,8 @@ plane has no way to tell it to forget. On top of that, when an update would
 leave a client with zero peers, the empty list is dropped from the message and
 the client reads it as "no change". That is why deleted devices kept showing up.
 
-Two things fix it here. Devices only ever see the router, which is never
-removed, so their peer list is never emptied. And for a real fresh start, give
+Two things fix it here. Every device's peer list always contains the router,
+which is never removed, so it is never emptied and removals are delivered. And for a real fresh start, give
 the stack new volumes (a new Dokploy compose, or delete `headscale-data` and
 `sidecar-state`), then on **every** old device:
 

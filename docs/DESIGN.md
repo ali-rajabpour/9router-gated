@@ -217,12 +217,14 @@ The objections were addressed as follows:
 - **New public-facing control plane**: accepted. Its gRPC API listens on
   loopback only. Enrollment needs a single-use key that expires in an hour,
   the router's key is never printed, and the access policy confines devices to
-  `tcp/80` on the router, so an enrolled rogue device gains the same thing a
-  legitimate one has: an address that still demands 9Router's API key.
+  `tcp/80` on the router plus ICMP between devices, so an enrolled rogue device
+  gains the same thing a legitimate one has: an address that still demands
+  9Router's API key, and the ability to ping.
 - **Stale devices**: Tailscale clients keep their last network map, and drop an
-  empty peer list as "no change". With devices isolated from each other their
-  only peer is the router, so removing a device never leaves ghosts behind on
-  the others. A replaced control plane still needs `tailscale logout` on every
+  empty peer list as "no change". Every device's peers include the router,
+  which is never removed, so the list is never empty and removals arrive as
+  removals. Devices see each other through an ICMP-only rule, which gives the
+  operator a full device list without opening TCP or UDP between them. A replaced control plane still needs `tailscale logout` on every
   old client.
 
 Three moving parts to replace one tunnel - but for users who need a mesh and

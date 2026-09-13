@@ -5,9 +5,9 @@
 #
 # Two Headscale users:
 #   Routers  the sidecar below. Receives connections, never initiates them.
-#   Devices  your laptops and phones. May reach Routers on tcp/80, nothing else.
-# Devices cannot see each other, so a removed device never lingers in another
-# device's peer list.
+#   Devices  your laptops and phones. May reach Routers on tcp/80, and may
+#            ping each other so they appear in each other's device list.
+# No TCP or UDP between devices, and the router can reach none of them.
 #
 # One-shot actions, set in Dokploy's Environment tab and redeploy:
 #   DEVICE_KEY=true         print a single-use key for Devices, valid 1 hour
@@ -77,7 +77,7 @@ services:
 
         # The policy names users that do not exist on a fresh database, so the
         # first boot starts deny-all and switches over once the users exist.
-        allow='{"acls":[{"action":"accept","src":["Devices@"],"dst":["Routers@:80"]}]}'
+        allow='{"acls":[{"action":"accept","src":["Devices@"],"dst":["Routers@:80"]},{"action":"accept","proto":"icmp","src":["Devices@"],"dst":["Devices@:*"]}]}'
         if [ -f /var/lib/headscale/.users-ok ]; then echo "$$allow"; else echo '{"grants":[]}'; fi > /etc/headscale/policy.json
 
         rm -f /var/lib/headscale/.ready
