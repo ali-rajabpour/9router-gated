@@ -131,21 +131,33 @@ services:
     entrypoint: ["/busybox/sh", "-c"]
     command:
       - |
+        echo "=== Config check ==="
+        head -3 /shared/config.yaml
+        echo "=== Headscale binary ==="
+        which headscale || ls /headscale 2>/dev/null || echo "headscale not found"
+        echo "=== Waiting for Headscale ==="
         for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
-          headscale --config /shared/config.yaml health 2>/dev/null && break
-          echo "Waiting for Headscale to be ready..."
+          wget -q -O- http://headscale:8080/health 2>/dev/null && break
+          echo "Waiting for Headscale HTTP endpoint... (attempt $$i/30)"
           sleep 2
         done
-        headscale --config /shared/config.yaml users create ${HEADSCALE_USER:-9router} 2>/dev/null || true
-        if [ ! -f /shared/preauthkey ] || [ -z "$$(cat /shared/preauthkey 2>/dev/null)" ]; then
-          KEY=$$(headscale --config /shared/config.yaml preauthkeys create --user ${HEADSCALE_USER:-9router} --reusable 2>&1 | grep -o 'tskey-auth-[a-zA-Z0-9_-]*')
+        echo "=== Creating user ==="
+        headscale --config /shared/config.yaml users create ${HEADSCALE_USER:-9router} 2>&1 || echo "User creation failed (may already exist)"
+        echo "=== Creating pre-auth key ==="
+        RAW=$$(headscale --config /shared/config.yaml preauthkeys create --user ${HEADSCALE_USER:-9router} --reusable 2>&1)
+        echo "Raw output: $$RAW"
+        KEY=$$(echo "$$RAW" | grep -o 'tskey-auth-[a-zA-Z0-9_-]*')
+        if [ -n "$$KEY" ]; then
           echo "$$KEY" > /shared/preauthkey
           echo "========================================"
           echo "Headscale pre-auth key created: $$KEY"
           echo "The Tailscale sidecar will use it automatically."
           echo "========================================"
         else
-          echo "Using existing pre-auth key from previous deploy"
+          echo "ERROR: Failed to extract pre-auth key from output"
+          if [ -f /shared/preauthkey ] && [ -n "$$(cat /shared/preauthkey 2>/dev/null)" ]; then
+            echo "Using existing pre-auth key from previous deploy"
+          fi
         fi
     volumes:
       - headscale-data:/var/lib/headscale
