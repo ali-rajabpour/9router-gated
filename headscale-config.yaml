@@ -25,7 +25,7 @@ prefixes:
 
 derp:
   server:
-    # Embedded DERP relay — relays traffic between mesh nodes over HTTPS
+    # Embedded DERP relay - relays traffic between mesh nodes over HTTPS
     # when direct WireGuard UDP can't connect (e.g. SNI-filtered networks).
     enabled: true
     region_id: 999
@@ -36,11 +36,11 @@ derp:
     # STUN address MUST be defined when the DERP server is enabled, but
     # we do NOT publish UDP 3478 from the container. STUN is therefore
     # unreachable, so clients skip direct-path discovery and relay through
-    # DERP over HTTPS — pure HTTPS, maximum censorship resistance, no UDP.
+    # DERP over HTTPS - pure HTTPS, maximum censorship resistance, no UDP.
     stun_listen_addr: "0.0.0.0:3478"
     private_key_path: /var/lib/headscale/derp_server_private.key
     automatically_add_embedded_derp_region: true
-  # Do NOT use Tailscale's public DERP servers — they live on
+  # Do NOT use Tailscale's public DERP servers - they live on
   # derpN.tailscale.com which is SNI-filtered in some networks.
   urls: []
   paths: []

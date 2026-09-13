@@ -1,13 +1,13 @@
 # dokploy-9router-private
 
 A hardened [9Router](https://github.com/decolua/9router) deployment for
-[Dokploy](https://dokploy.com), reachable only by you. Three access modes —
+[Dokploy](https://dokploy.com), reachable only by you. Three access modes -
 [Tailscale](https://tailscale.com), an SSH tunnel, or a self-hosted
-[Headscale](https://headscale.net) mesh — sharing one stack and one database.
+[Headscale](https://headscale.net) mesh - sharing one stack and one database.
 
 No public DNS record. No Traefik route for 9Router. Nothing about 9Router is
-exposed to the internet. (Headscale mode adds one public service — the
-Headscale control plane itself — but 9Router stays private.) Nothing about
+exposed to the internet. (Headscale mode adds one public service - the
+Headscale control plane itself - but 9Router stays private.) Nothing about
 the rest of your server changes.
 
 ---
@@ -243,7 +243,7 @@ to your mode's file, leave **Isolated Deployments off**, add no domain, and set
 **Headscale mode**, `./docker-compose.headscale.yml`:
 
 1. Point a DNS record at your VPS for `headscale.yourdomain.com`.
-2. Edit `headscale-config.yaml` line 5 — replace `HEADSCALE_DOMAIN` with your
+2. Edit `headscale-config.yaml` line 5 - replace `HEADSCALE_DOMAIN` with your
    actual domain. Headscale reads this file literally; no env substitution.
 3. Add three Dokploy File Mounts: `serve-headscale.json`,
    `headscale-config.yaml` (same pattern as `serve.json` in Tailscale mode).
@@ -285,7 +285,7 @@ In Headscale mode, you run and maintain a control plane + DERP relay. It is
 lightweight, but it is another public-facing service and another thing to keep
 up. If Headscale goes down, new nodes cannot join and relayed connections drop
 (already-enrolled nodes with direct WireGuard connectivity survive). You also
-get no per-node TLS certificate — `tailscale serve` runs in HTTP mode, so
+get no per-node TLS certificate - `tailscale serve` runs in HTTP mode, so
 `AUTH_COOKIE_SECURE` is `false`. WireGuard encrypts the transport, but clients
 that insist on an `https://` base URL will not work without a local terminator.
 Use this mode only when Tailscale's hosted control plane is filtered.

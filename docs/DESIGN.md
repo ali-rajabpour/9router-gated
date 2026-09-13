@@ -98,7 +98,7 @@ headscale.yourdomain.com ──HTTPS 443──> [headscale]  (control plane + DE
 
 None of the three publishes a 9Router port reachable from the internet, creates
 a Traefik route for 9Router, or needs a public DNS record for 9Router. Headscale
-mode adds one public service — the Headscale control plane — but 9Router itself
+mode adds one public service - the Headscale control plane - but 9Router itself
 stays private.
 
 ### Namespace sharing
@@ -134,7 +134,7 @@ client 100.x → serve (TLS :443 or HTTP :80) → XFF=100.x, XFP=…
 Two incidental benefits over a Traefik fronting: the rate limiter gets real
 per-client buckets, and `X-Forwarded-Proto: https` (Tailscale mode) makes
 `AUTH_COOKIE_SECURE` behave correctly. In Headscale mode, `X-Forwarded-Proto`
-is `http`, so `AUTH_COOKIE_SECURE` is `false` — matching SSH mode.
+is `http`, so `AUTH_COOKIE_SECURE` is `false` - matching SSH mode.
 
 **If upstream changes either `custom-server.js`'s header handling or
 `dashboardGuard.isLocalRequest`, re-run `verify.sh` before trusting the
@@ -196,7 +196,7 @@ The objections were addressed as follows:
 - **Self-hosted DERP**: the embedded DERP relay in Headscale is used, with
   `urls: []` to avoid Tailscale's public DERP servers (which live on
   `*.tailscale.com` and are filtered). STUN is configured but its UDP port is
-  not published, so clients relay through DERP over HTTPS/443 — pure HTTPS,
+  not published, so clients relay through DERP over HTTPS/443 - pure HTTPS,
   no UDP, maximum censorship resistance.
 - **New public-facing control plane**: accepted as the trade-off. Headscale is
   the one public service in the stack. 9Router itself stays private. The
@@ -204,7 +204,7 @@ The objections were addressed as follows:
   attacker enroll rogue nodes, so it should be hardened (SSH key-only, Fail2Ban,
   restricted API access).
 
-Three moving parts to replace one tunnel — but for users who need a mesh and
+Three moving parts to replace one tunnel - but for users who need a mesh and
 cannot reach Tailscale's hosted control plane, it is the right trade.
 
 SSH was already reachable on both 22 and 443, needs no new infrastructure, and

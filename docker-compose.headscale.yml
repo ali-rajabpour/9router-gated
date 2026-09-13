@@ -47,7 +47,7 @@ services:
 
   # Tailscale sidecar, pointed at your Headscale instead of Tailscale's
   # hosted control plane. Userspace mode: no NET_ADMIN, no /dev/net/tun.
-  # serve runs in HTTP mode (no HTTPS cert — Headscale does not support
+  # serve runs in HTTP mode (no HTTPS cert - Headscale does not support
   # per-node cert provisioning). WireGuard encrypts the transport; the
   # HTTP layer is just a proxy.
   tailscale:
@@ -56,7 +56,7 @@ services:
     hostname: 9router
     environment:
       # Headscale pre-auth key (generated via `headscale preauthkeys create`),
-      # not a Tailscale key. Same env var — the client sends it to whatever
+      # not a Tailscale key. Same env var - the client sends it to whatever
       # login server it's configured for.
       TS_AUTHKEY: ${HS_AUTHKEY}
       TS_STATE_DIR: /var/lib/tailscale

@@ -3,7 +3,7 @@
 Three access modes, same stack, same data. Pick one at deploy time by choosing
 which compose file Dokploy builds. None publishes 9Router to the internet, none
 creates a Traefik route for 9Router, and none touches your other projects on the
-VPS. (Headscale mode adds one public service — the Headscale control plane —
+VPS. (Headscale mode adds one public service - the Headscale control plane -
 but 9Router itself stays private.)
 
 | | Tailscale | SSH tunnel | Headscale |
@@ -381,7 +381,7 @@ them to `<project>/files/`, which is why the compose file mounts them as
 `../files/serve-headscale.json` and `../files/headscale-config.yaml`.
 
 **You must edit `headscale-config.yaml` before mounting it.** Headscale reads
-the config file literally — no environment variable substitution. Replace
+the config file literally - no environment variable substitution. Replace
 `HEADSCALE_DOMAIN` on line 5 with e.g. `https://headscale.yourdomain.com`.
 
 ## C3. First deploy: Headscale only
@@ -391,7 +391,7 @@ Set **Compose Path** to `./docker-compose.headscale.yml`, set `JWT_SECRET`,
 `HS_AUTHKEY` empty for now. Deploy.
 
 The Headscale container comes up. The Tailscale sidecar will fail to join (no
-auth key yet) — that is expected. Confirm Headscale is reachable:
+auth key yet) - that is expected. Confirm Headscale is reachable:
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' https://headscale.yourdomain.com/health
@@ -446,7 +446,7 @@ docker exec <name> headscale nodes approve --node <id>
 Headscale does not support per-node TLS certificate provisioning
 (`tailscale cert` / HTTPS serve). So `tailscale serve` runs in **HTTP mode**
 on port 80, and `AUTH_COOKIE_SECURE` is `false`. WireGuard encrypts the
-transport between mesh nodes, so the traffic is encrypted in transit — but
+transport between mesh nodes, so the traffic is encrypted in transit - but
 clients that require an `https://` base URL will not work without a local
 TLS terminator. For CLI tools (Claude Code, Hermes, curl) this is fine; they
 accept `http://` URLs. For browsers, the dashboard works over HTTP on the
@@ -460,7 +460,7 @@ on the client machine that terminates TLS and forwards to the mesh IP.
 The embedded DERP relay relays traffic between mesh nodes over HTTPS when
 direct WireGuard UDP cannot connect. Since Headscale and 9Router are on the
 same VPS, the relay hop adds ~zero latency. STUN (UDP 3478) is configured but
-its port is not published, so it is unreachable — clients skip direct-path
+its port is not published, so it is unreachable - clients skip direct-path
 discovery and relay through DERP over HTTPS/443. Pure HTTPS, no UDP, same
 transport as cloudflared. If your network filters `*.tailscale.com` but allows
 other HTTPS, this works.
