@@ -97,7 +97,9 @@ TS_AUTHKEY=tskey-auth-...        # Tailscale mode only
 HEADSCALE_DOMAIN=headscale.example.com  # Headscale mode only
 HEADSCALE_USER=9router           # Headscale mode, optional (default: 9router)
 HS_AUTHKEY=                      # Headscale mode, optional (auto-generated if empty)
-CERT_RESOLVER=letsencrypt        # Headscale mode, optional (default: letsencrypt)
+CERT_RESOLVER=                   # Headscale mode, optional. Leave empty if using
+                                 # uploaded certs (e.g. Cloudflare Origin).
+                                 # Set to "letsencrypt" for ACME.
 ```
 
 `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when it is
@@ -368,8 +370,9 @@ Traefik (managed by Dokploy) terminates TLS on this hostname.
 
 Set **Compose Path** to `./docker-compose.headscale.yml`, set `JWT_SECRET`,
 `INITIAL_PASSWORD`, and `HEADSCALE_DOMAIN` in the Environment tab. Set
-`CERT_RESOLVER` if your Dokploy uses a non-default Traefik resolver (e.g.
-`cloudflare`). Leave `HS_AUTHKEY` empty. Deploy.
+`CERT_RESOLVER` only if you use ACME (e.g. `letsencrypt`). Leave it empty
+if you upload custom certificates in Dokploy (e.g. Cloudflare Origin certs).
+Leave `HS_AUTHKEY` empty. Deploy.
 
 The Headscale container starts, waits for its own health check, then
 automatically:

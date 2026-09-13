@@ -555,7 +555,7 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
    | `HEADSCALE_DOMAIN` | `headscale.yourdomain.com` (your actual domain) | Yes |
    | `HEADSCALE_USER` | `9router` (or any name you want) | No (defaults to `9router`) |
    | `HS_AUTHKEY` | Leave empty - the Headscale container generates one automatically | No |
-   | `CERT_RESOLVER` | `cloudflare` (or whatever Traefik resolver your Dokploy uses) | No (defaults to `letsencrypt`) |
+   | `CERT_RESOLVER` | Leave empty if using uploaded certs (e.g. Cloudflare Origin). Set to `letsencrypt` for ACME. | No (defaults to empty) |
 
    > `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when
    > it is unset. `HEADSCALE_DOMAIN` is substituted into the Headscale config

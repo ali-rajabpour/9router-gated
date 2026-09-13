@@ -116,7 +116,10 @@ services:
       - traefik.enable=true
       - traefik.http.routers.headscale.rule=Host(`${HEADSCALE_DOMAIN}`)
       - traefik.http.routers.headscale.entrypoints=websecure
-      - traefik.http.routers.headscale.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
+      # TLS cert resolver. Leave CERT_RESOLVER empty if you upload custom
+      # certificates in Dokploy (e.g. Cloudflare Origin certs). Set it to
+      # "letsencrypt" or your custom ACME resolver name if you use ACME.
+      - traefik.http.routers.headscale.tls.certresolver=${CERT_RESOLVER:-}
       - traefik.http.routers.headscale.service=headscale-svc
       - traefik.http.services.headscale-svc.loadbalancer.server.port=8080
       # HTTP -> HTTPS redirect
