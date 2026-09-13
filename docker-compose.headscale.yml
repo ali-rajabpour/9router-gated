@@ -200,8 +200,13 @@ services:
     image: ${NINEROUTER_IMAGE:-decolua/9router:0.5.75}
     restart: unless-stopped
     network_mode: "service:sidecar"
+    # A container sharing another's netns stays attached to the old namespace
+    # when that container restarts, and becomes unreachable. restart: true
+    # makes compose restart 9router whenever it restarts the sidecar.
     depends_on:
-      - sidecar
+      sidecar:
+        condition: service_started
+        restart: true
     volumes:
       - 9router-data:/app/data
     environment:
