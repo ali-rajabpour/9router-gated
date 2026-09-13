@@ -159,7 +159,9 @@ services:
           # Run via: DELETE_NODE_ID=<id>
           if [ -n "$${DELETE_NODE_ID:-}" ]; then
             echo "Deleting stale node: $$DELETE_NODE_ID"
+            headscale --config /shared/config.yaml nodes delete --help 2>&1
             headscale --config /shared/config.yaml nodes delete --id $$DELETE_NODE_ID 2>&1
+            echo "Delete exit code: $$?"
           fi
           # List all nodes for visibility
           echo "=== Nodes ==="
