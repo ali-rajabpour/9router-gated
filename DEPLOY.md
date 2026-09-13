@@ -95,7 +95,7 @@ JWT_SECRET=<openssl rand -hex 32>
 INITIAL_PASSWORD=<a real password>
 TS_AUTHKEY=tskey-auth-...        # Tailscale mode only
 HEADSCALE_DOMAIN=headscale.example.com  # Headscale mode only
-HEADSCALE_USER=9router           # Headscale mode, optional (default: 9router)
+HEADSCALE_USER=Routers           # Headscale mode, optional (default: Routers)
 HS_AUTHKEY=                      # Headscale mode, optional (auto-generated if empty)
 CERT_RESOLVER=                   # Headscale mode, optional. Leave empty if using
                                  # uploaded certs (e.g. Cloudflare Origin).

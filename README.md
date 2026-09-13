@@ -553,7 +553,7 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
    | `JWT_SECRET` | The hex string from `openssl rand -hex 32` | Yes |
    | `INITIAL_PASSWORD` | The base64 string from `openssl rand -base64 24` | Yes |
    | `HEADSCALE_DOMAIN` | `headscale.yourdomain.com` (your actual domain) | Yes |
-   | `HEADSCALE_USER` | `9router` (or any name you want) | No (defaults to `9router`) |
+   | `HEADSCALE_USER` | `Routers` (or any name you want) | No (defaults to `Routers`) |
    | `HS_AUTHKEY` | Leave empty - the Headscale container generates one automatically | No |
    | `CERT_RESOLVER` | Leave empty if using uploaded certs (e.g. Cloudflare Origin). Set to `letsencrypt` for ACME. | No (defaults to empty) |
 

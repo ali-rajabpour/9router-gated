@@ -143,6 +143,22 @@ services:
           sleep 2
         done
         if [ -f /shared/preauthkey ] && [ -n "$$(cat /shared/preauthkey 2>/dev/null)" ]; then
+          # One-time: wipe all nodes and users for a fresh start.
+          # Run via: WIPE_ALL=true
+          if [ "$${WIPE_ALL:-}" = "true" ]; then
+            echo "=== WIPING ALL NODES AND USERS ==="
+            for nid in $$(headscale --config /shared/config.yaml nodes list --output json 2>&1 | grep -oE '"id":[0-9]+' | grep -oE '[0-9]+'); do
+              echo "Deleting node: $$nid"
+              headscale --config /shared/config.yaml nodes delete --identifier $$nid --force 2>&1
+            done
+            for uid in $$(headscale --config /shared/config.yaml users list --output json 2>&1 | grep -oE '"id":[0-9]+' | grep -oE '[0-9]+'); do
+              echo "Deleting user: $$uid"
+              headscale --config /shared/config.yaml users delete --id $$uid 2>&1
+            done
+            rm -f /shared/preauthkey
+            echo "=== WIPE COMPLETE. Remove WIPE_ALL env var and redeploy. ==="
+            exit 0
+          fi
           echo "========================================"
           echo "Headscale pre-auth key: $$(cat /shared/preauthkey)"
           echo "Use this to join client machines to the mesh:"
@@ -163,8 +179,8 @@ services:
           fi
           exit 0
         fi
-        echo "Creating Headscale user: ${HEADSCALE_USER:-9router}"
-        headscale --config /shared/config.yaml users create ${HEADSCALE_USER:-9router} 2>&1 || echo "User may already exist"
+        echo "Creating Headscale user: ${HEADSCALE_USER:-Routers}"
+        headscale --config /shared/config.yaml users create ${HEADSCALE_USER:-Routers} 2>&1 || echo "User may already exist"
         USER_ID=$$(headscale --config /shared/config.yaml users list --output json 2>&1 | sed 's/ //g' | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
         if [ -z "$$USER_ID" ]; then
           echo "ERROR: Could not find user ID after creating user"
@@ -190,6 +206,7 @@ services:
       - APPROVE_AUTH_ID=${APPROVE_AUTH_ID:-}
       - APPROVE_USER=${APPROVE_USER:-}
       - DELETE_NODE_ID=${DELETE_NODE_ID:-}
+      - WIPE_ALL=${WIPE_ALL:-}
     depends_on:
       - headscale
 
