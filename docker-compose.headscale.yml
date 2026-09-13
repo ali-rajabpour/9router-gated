@@ -180,6 +180,9 @@ services:
       - headscale-data:/var/lib/headscale
       - headscale-run:/var/run/headscale
       - shared:/shared
+    environment:
+      - APPROVE_AUTH_ID=${APPROVE_AUTH_ID:-}
+      - APPROVE_USER=${APPROVE_USER:-}
     depends_on:
       - headscale
 
