@@ -1,4 +1,4 @@
-# dokploy-9router-private
+# 9router-gated
 
 A hardened [9Router](https://github.com/decolua/9router) deployment for
 [Dokploy](https://dokploy.com), reachable only by you. Three access modes -
@@ -9,6 +9,28 @@ No public DNS record. No Traefik route for 9Router. Nothing about 9Router is
 exposed to the internet. (Headscale mode adds one public service - the
 Headscale control plane itself - but 9Router stays private.) Nothing about
 the rest of your server changes.
+
+---
+
+## Table of contents
+
+- [Why this exists](#why-this-exists)
+- [What this repository does about it](#what-this-repository-does-about-it)
+- [Which mode should I use?](#which-mode-should-i-use)
+- [Prerequisites](#prerequisites)
+- [Installation: Tailscale mode](#installation-tailscale-mode)
+- [Installation: SSH mode](#installation-ssh-mode)
+- [Installation: Headscale mode](#installation-headscale-mode)
+- [Post-install: verify](#post-install-verify)
+- [Post-install: connect your CLI and IDE](#post-install-connect-your-cli-and-ide)
+- [Auto-update](#auto-update)
+- [Stopping, restarting, and switching modes](#stopping-restarting-and-switching-modes)
+- [Contents](#contents)
+- [Requirements](#requirements)
+- [Trade-offs](#trade-offs)
+- [Acknowledgements](#acknowledgements)
+- [Author](#author)
+- [License](#license)
 
 ---
 
@@ -180,31 +202,55 @@ certificate (HTTP over WireGuard, not HTTPS); SSH gives you zero extra
 infrastructure and survives filtering, at the cost of a tunnel to keep alive
 on each machine and no TLS for clients that insist on it.
 
-## Contents
+---
 
-| File | Purpose |
-| --- | --- |
-| `docker-compose.yml` | Tailscale mode: sidecar, 9Router, Headroom |
-| `docker-compose.ssh.yml` | SSH mode: 9Router bound to host loopback, Headroom |
-| `docker-compose.headscale.yml` | Headscale mode: Headscale + sidecar, 9Router, Headroom |
-| `serve.json` | `tailscale serve` config (Tailscale mode), mounted via Dokploy |
-| `serve-headscale.json` | `tailscale serve` config (Headscale mode, HTTP), mounted via Dokploy |
-| `headscale-config.yaml` | Headscale server config, mounted via Dokploy |
-| `.env.example` | The required secrets |
-| `verify.sh` | Post-deploy assertions that privileges did not leak |
-| `DEPLOY.md` | Full runbook for all three modes |
-| `docs/DESIGN.md` | Design rationale, upstream review, rejected alternatives |
+## Prerequisites
 
-## Quick start
+All modes share these:
 
-Create a Dokploy **Compose** project from this repository, set **Compose Path**
-to your mode's file, leave **Isolated Deployments off**, add no domain, and set
-`JWT_SECRET` and `INITIAL_PASSWORD` in the Environment tab.
+1. **A VPS running [Dokploy](https://dokploy.com).** If you do not have one,
+   follow the [Dokploy installation guide](https://docs.dokploy.com/docs/getting-started/install).
+2. **SSH access to the VPS** with a non-root user that has sudo.
+3. **Generate two secrets** before you start. Run these on any machine and
+   save the output:
 
-**Tailscale mode**, `./docker-compose.yml`:
+   ```bash
+   # JWT secret (used to sign dashboard session cookies)
+   openssl rand -hex 32
 
-1. In the Tailscale admin console, enable MagicDNS and HTTPS Certificates, then
-   replace the default allow-everything policy with:
+   # Initial dashboard password (change it in the UI after first login)
+   openssl rand -base64 24
+   ```
+
+4. **Know your Dokploy panel URL** (e.g. `https://panel.yourdomain.com`) and
+   have it accessible in your browser.
+
+Mode-specific prerequisites are listed in each installation section below.
+
+---
+
+## Installation: Tailscale mode
+
+**Best for:** most users. Real HTTPS URL, least infrastructure, mesh
+membership as a second gate.
+
+**Compose file:** `./docker-compose.yml`
+**Client URL:** `https://9router.<your-tailnet>.ts.net`
+
+### Prerequisites
+
+- A [Tailscale account](https://login.tailscale.com/start) (free tier is
+  sufficient)
+- The Tailscale client installed on every machine that will use 9Router
+  ([download](https://tailscale.com/download))
+
+### Step 1: Configure Tailscale ACLs
+
+1. Log in to the [Tailscale admin console](https://login.tailscale.com/admin).
+2. Go to **DNS** and enable **MagicDNS**.
+3. Still under **DNS**, enable **HTTPS Certificates**. This is required for
+   `tailscale serve` to issue a TLS certificate.
+4. Go to **Access Controls** and replace the default policy with:
 
    ```jsonc
    {
@@ -219,49 +265,533 @@ to your mode's file, leave **Isolated Deployments off**, add no domain, and set
    }
    ```
 
-   The tag goes in `dst` only. Putting it in `src` as well grants the node
-   access to itself and your own machines nothing. On older tailnets that use
-   `acls` instead of `grants`, see [DEPLOY.md](DEPLOY.md) for the equivalent.
+   > The tag goes in `dst` only. Putting it in `src` as well grants the node
+   > access to itself and your own machines nothing. On older tailnets that
+   > use `acls` instead of `grants`, see [DEPLOY.md](DEPLOY.md) for the
+   > equivalent.
 
-2. Generate a reusable, non-ephemeral auth key carrying `tag:nine-router`, and
-   set it as `TS_AUTHKEY`.
-3. Add a Dokploy File Mount with **File Path** `serve.json` and the contents of
-   `serve.json` as its content. Mount the file this way rather than from the
-   repository, which Dokploy re-clones on every deploy.
-4. Deploy, then `./verify.sh https://9router.<your-tailnet>.ts.net`.
+### Step 2: Generate a Tailscale auth key
 
-**SSH mode**, `./docker-compose.ssh.yml`:
+1. In the admin console, go to **Settings** and enable **Device approval**.
+2. Go to **Keys** and click **Generate auth key**.
+3. Set it to **reusable** and **non-ephemeral**, and tag it `tag:nine-router`.
+4. Copy the key. It starts with `tskey-auth-` and is shown only once.
 
-1. Deploy. There is no step 2 on the server.
-2. On the VPS, confirm `ss -tlnp | grep 20128` shows `127.0.0.1:20128` and not
-   `0.0.0.0:20128`.
-3. On each client, `ssh -N -L 20128:127.0.0.1:20128 <user>@<vps>`, or the
-   `autossh` service in [DEPLOY.md](DEPLOY.md) for something that survives
-   sleep and reboots.
-4. `./verify.sh http://127.0.0.1:20128`.
+### Step 3: Create the Dokploy project
 
-**Headscale mode**, `./docker-compose.headscale.yml`:
+1. Open your Dokploy panel in a browser.
+2. Go to **Create** and select **Compose**.
+3. Name the project `9router`.
+4. Point it at this repository:
+   `https://github.com/ali-rajabpour/9router-gated`
+5. Set **Compose Path** to `./docker-compose.yml`.
+6. Under **Advanced**, set **Isolated Deployments** to **OFF**. (It injects a
+   `networks:` key into every service, which is invalid alongside
+   `network_mode` and will fail the deploy.)
+7. **Do not add a domain.** No Traefik router, no `dokploy-network`. That is
+   the point.
 
-1. Point a DNS record at your VPS for `headscale.yourdomain.com`.
-2. Edit `headscale-config.yaml` line 5 - replace `HEADSCALE_DOMAIN` with your
-   actual domain. Headscale reads this file literally; no env substitution.
-3. Add three Dokploy File Mounts: `serve-headscale.json`,
-   `headscale-config.yaml` (same pattern as `serve.json` in Tailscale mode).
-4. Set `HEADSCALE_DOMAIN` and `HS_AUTHKEY` in the Environment tab. Generate the
-   Headscale pre-auth key after first deploy:
-   `docker exec <headscale-container> headscale users create <user>` then
-   `headscale preauthkeys create --user <user>`.
-5. Deploy Headscale first, then enroll the sidecar. Full steps in
-   [DEPLOY.md](DEPLOY.md) §C.
-6. On each client, install Tailscale and join your Headscale:
-   `tailscale up --login-server https://headscale.yourdomain.com`.
-7. `./verify.sh http://100.64.0.2:80` (replace with your sidecar's mesh IP).
+### Step 4: Set environment variables
 
-Full instructions, including client configuration for Claude Code and Hermes,
-the update job, and how to switch modes later, are in [DEPLOY.md](DEPLOY.md).
+1. In the Dokploy project, go to the **Environment** tab.
+2. Add these variables:
 
-> `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when it is
-> unset.
+   | Variable | Value |
+   |---|---|
+   | `TS_AUTHKEY` | The Tailscale auth key from Step 2 |
+   | `JWT_SECRET` | The hex string from `openssl rand -hex 32` |
+   | `INITIAL_PASSWORD` | The base64 string from `openssl rand -base64 24` |
+
+   > `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when
+   > it is unset. It is bootstrap-only: once you set a password in the
+   > dashboard, that bcrypt hash in SQLite takes precedence.
+
+### Step 5: Add the serve config as a file mount
+
+1. In the Dokploy project, go to **Advanced** and find **Volumes**.
+2. Click **Add File Mount** and fill in:
+
+   | Field | Value |
+   |---|---|
+   | **File Path** | `serve.json` |
+   | **Content** | Paste the contents of `serve.json` from this repository |
+
+   > File Path is a bare filename. No leading slash, no directory, no
+   > `../files/` prefix. Dokploy writes it to `<project>/files/serve.json`,
+   > which is why `docker-compose.yml` mounts it as `../files/serve.json`.
+   >
+   > Do not mount the repository's `serve.json` directly. Dokploy re-clones
+   > the repository on every deploy, so a direct mount works once and then
+   > breaks. File Mounts live outside the cloned directory and survive.
+
+### Step 6: Deploy
+
+1. Click **Deploy** in the Dokploy panel.
+2. Wait for the containers to start. Dokploy renders every stderr line as an
+   error and `tailscaled` logs everything to stderr, so read the state rather
+   than the log color.
+3. SSH into the VPS and confirm the sidecar came up:
+
+   ```bash
+   docker ps --format '{{.Names}}' | grep -i tailscale
+   docker exec <name> tailscale status         # node active, has an address
+   docker exec <name> tailscale serve status   # https://... -> http://127.0.0.1:20128
+   ```
+
+4. If device approval is on (Step 2), approve the new node under **Machines**
+   in the Tailscale admin console.
+
+### Step 7: Install Tailscale on client machines
+
+1. Install the Tailscale client on each machine that will use 9Router:
+   [download page](https://tailscale.com/download).
+2. Log in with the same Tailscale account.
+3. If device approval is on, approve each machine in the admin console.
+
+Your base URL is `https://9router.<your-tailnet>.ts.net`. Proceed to
+[Post-install: verify](#post-install-verify).
+
+> **If nothing routes:** The usual cause is device approval (Step 2) - a
+> freshly authenticated node sits unapproved until you approve it under
+> **Machines**. Also, `serve` fetches the TLS certificate lazily on the first
+> HTTPS request, so a slow first load is normal. If it never issues, **DNS
+> and HTTPS Certificates** is off.
+
+---
+
+## Installation: SSH mode
+
+**Best for:** networks where Tailscale is filtered, and you want zero extra
+infrastructure.
+
+**Compose file:** `./docker-compose.ssh.yml`
+**Client URL:** `http://127.0.0.1:20128` (via SSH tunnel)
+
+### Prerequisites
+
+- SSH access to the VPS with key-based authentication
+- `autossh` on client machines if you want the tunnel to survive
+  sleep/reboots (optional but recommended)
+
+### Step 1: Create the Dokploy project
+
+1. Open your Dokploy panel in a browser.
+2. Go to **Create** and select **Compose**.
+3. Name the project `9router`.
+4. Point it at this repository:
+   `https://github.com/ali-rajabpour/9router-gated`
+5. Set **Compose Path** to `./docker-compose.ssh.yml`.
+6. Under **Advanced**, set **Isolated Deployments** to **OFF**.
+7. **Do not add a domain.** No Traefik router, no `dokploy-network`.
+
+### Step 2: Set environment variables
+
+1. In the Dokploy project, go to the **Environment** tab.
+2. Add these variables:
+
+   | Variable | Value |
+   |---|---|
+   | `JWT_SECRET` | The hex string from `openssl rand -hex 32` |
+   | `INITIAL_PASSWORD` | The base64 string from `openssl rand -base64 24` |
+
+   > `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when
+   > it is unset.
+
+### Step 3: Deploy
+
+1. Click **Deploy** in the Dokploy panel.
+2. Wait for the container to start.
+
+### Step 4: Confirm the port is loopback-only
+
+This is the single most important check. SSH into the VPS and run:
+
+```bash
+ss -tlnp | grep 20128
+```
+
+You must see `127.0.0.1:20128`. If you see `0.0.0.0:20128` or `*:20128`, the
+`127.0.0.1:` prefix was dropped from the `ports:` entry and 9Router is exposed
+to the internet. Stop and fix that before going further.
+
+### Step 5: Open the SSH tunnel from each client
+
+From each client machine, run:
+
+```bash
+ssh -N -L 20128:127.0.0.1:20128 <user>@<vps>
+```
+
+9Router is now at `http://127.0.0.1:20128` on that machine.
+
+For a tunnel that survives sleep, network changes, and reboots, use `autossh`:
+
+```bash
+autossh -M 0 -f -N \
+  -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+  -o ExitOnForwardFailure=yes \
+  -L 20128:127.0.0.1:20128 <user>@<vps>
+```
+
+> `ExitOnForwardFailure=yes` matters. Without it, a failed forward leaves you
+> with a live SSH session and a dead tunnel, which looks like 9Router being
+> down.
+
+For a persistent service on **macOS**, create a launch agent at
+`~/Library/LaunchAgents/com.local.9router-tunnel.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.local.9router-tunnel</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/autossh</string>
+    <string>-M</string><string>0</string>
+    <string>-N</string>
+    <string>-o</string><string>ServerAliveInterval=30</string>
+    <string>-o</string><string>ServerAliveCountMax=3</string>
+    <string>-o</string><string>ExitOnForwardFailure=yes</string>
+    <string>-L</string><string>20128:127.0.0.1:20128</string>
+    <string>USER@VPS</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict>
+</plist>
+```
+
+Then `launchctl load` it.
+
+On **Windows**, create a Task Scheduler task running at logon:
+
+```
+Program:   C:\Windows\System32\OpenSSH\ssh.exe
+Arguments: -N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 20128:127.0.0.1:20128 USER@VPS
+```
+
+Use key-based auth so nothing prompts. A dedicated SSH key with
+`command="",no-pty,no-agent-forwarding,permitopen="127.0.0.1:20128"` in
+`authorized_keys` restricts that key to this one forward and nothing else.
+
+### Step 6: Harden the SSH server
+
+The tunnel inherits whatever your SSH configuration allows, so it is now part
+of this system's security. Confirm in `/etc/ssh/sshd_config` on the VPS:
+
+```
+PasswordAuthentication no
+PermitRootLogin no
+```
+
+Proceed to [Post-install: verify](#post-install-verify).
+
+---
+
+## Installation: Headscale mode
+
+**Best for:** networks where Tailscale is SNI-filtered, and you want a mesh
+VPN rather than per-machine SSH tunnels.
+
+**Compose file:** `./docker-compose.headscale.yml`
+**Client URL:** `http://100.64.0.2:80` (mesh IP, will vary)
+
+### Prerequisites
+
+- A domain name (or subdomain) you control, with DNS access
+- The Tailscale client installed on every machine that will use 9Router
+  ([download](https://tailscale.com/download))
+
+### Step 1: Point DNS at your VPS
+
+Create an A record pointing at your VPS public IP:
+
+```
+headscale.yourdomain.com  A  <vps-ip>
+```
+
+Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
+
+### Step 2: Edit the Headscale config
+
+1. Open `headscale-config.yaml` from this repository.
+2. On line 5, replace `HEADSCALE_DOMAIN` with your actual domain:
+
+   ```yaml
+   # Before:
+   server_url: https://HEADSCALE_DOMAIN
+
+   # After:
+   server_url: https://headscale.yourdomain.com
+   ```
+
+   > Headscale reads this file literally. No environment variable
+   > substitution. You must edit the file before mounting it.
+
+### Step 3: Create the Dokploy project
+
+1. Open your Dokploy panel in a browser.
+2. Go to **Create** and select **Compose**.
+3. Name the project `9router`.
+4. Point it at this repository:
+   `https://github.com/ali-rajabpour/9router-gated`
+5. Set **Compose Path** to `./docker-compose.headscale.yml`.
+6. Under **Advanced**, set **Isolated Deployments** to **OFF**.
+7. **Do not add a domain to 9Router.** (The Headscale container uses
+   `dokploy-network` for Traefik routing, but 9Router itself stays private.)
+
+### Step 4: Set environment variables
+
+1. In the Dokploy project, go to the **Environment** tab.
+2. Add these variables:
+
+   | Variable | Value |
+   |---|---|
+   | `JWT_SECRET` | The hex string from `openssl rand -hex 32` |
+   | `INITIAL_PASSWORD` | The base64 string from `openssl rand -base64 24` |
+   | `HEADSCALE_DOMAIN` | `headscale.yourdomain.com` (your actual domain) |
+   | `HS_AUTHKEY` | Leave empty for now. You will generate it in Step 6. |
+
+   > `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when
+   > it is unset.
+
+### Step 5: Add file mounts
+
+1. In the Dokploy project, go to **Advanced** and find **Volumes**.
+2. Add two file mounts:
+
+   **Mount 1:**
+
+   | Field | Value |
+   |---|---|
+   | **File Path** | `serve-headscale.json` |
+   | **Content** | Paste the contents of `serve-headscale.json` from this repository |
+
+   **Mount 2:**
+
+   | Field | Value |
+   |---|---|
+   | **File Path** | `headscale-config.yaml` |
+   | **Content** | Paste the **edited** contents of `headscale-config.yaml` (with your domain on line 5) |
+
+   > Same bare-filename convention as Tailscale mode. Dokploy writes them to
+   > `<project>/files/`, which is why the compose file mounts them as
+   > `../files/serve-headscale.json` and `../files/headscale-config.yaml`.
+
+### Step 6: First deploy (Headscale only)
+
+1. Click **Deploy** in the Dokploy panel.
+2. The Headscale container comes up. The Tailscale sidecar will fail to join
+   (no auth key yet) - that is expected.
+3. SSH into the VPS and confirm Headscale is reachable:
+
+   ```bash
+   curl -sS -o /dev/null -w '%{http_code}\n' https://headscale.yourdomain.com/health
+   # expect 200
+   ```
+
+### Step 7: Create a Headscale user and pre-auth key
+
+SSH into the VPS and run:
+
+```bash
+# Find the Headscale container name
+docker ps --format '{{.Names}}' | grep -i headscale
+
+# Create a user
+docker exec <name> headscale users create 9router
+
+# Generate a reusable pre-auth key
+docker exec <name> headscale preauthkeys create --user 9router --reusable
+```
+
+Copy the key. Go back to the Dokploy **Environment** tab and set `HS_AUTHKEY`
+to this value. Click **Deploy** again.
+
+### Step 8: Confirm the sidecar joined
+
+SSH into the VPS and run:
+
+```bash
+docker ps --format '{{.Names}}' | grep -i tailscale
+docker exec <name> tailscale status
+# expect: node active, has a 100.64.0.x address
+
+docker exec <name> tailscale serve status
+# expect: http://100.64.0.x:80 -> http://127.0.0.1:20128
+```
+
+Note the mesh IP (`100.64.0.x`). That is your base URL.
+
+### Step 9: Enroll client machines
+
+On each client machine that will use 9Router:
+
+1. Install the Tailscale client: [download page](https://tailscale.com/download).
+2. Join your Headscale (not Tailscale's hosted control plane):
+
+   ```bash
+   tailscale up --login-server https://headscale.yourdomain.com
+   ```
+
+3. If you enabled node approval in Headscale, approve the node:
+
+   ```bash
+   # On the VPS:
+   docker exec <name> headscale nodes list
+   docker exec <name> headscale nodes approve --node <id>
+   ```
+
+Your base URL is `http://100.64.0.2:80` (replace with your sidecar's mesh IP).
+Proceed to [Post-install: verify](#post-install-verify).
+
+> **The HTTPS gap:** Headscale does not support per-node TLS certificate
+> provisioning, so `tailscale serve` runs in HTTP mode and `AUTH_COOKIE_SECURE`
+> is `false`. WireGuard encrypts the transport between mesh nodes, so traffic
+> is encrypted in transit. CLI tools (Claude Code, curl, etc.) accept `http://`
+> URLs fine. If you need `https://` for a client, run a local reverse proxy
+> (Caddy, nginx) on the client machine that terminates TLS and forwards to
+> the mesh IP.
+
+---
+
+## Post-install: verify
+
+From a client machine, against your mode's base URL:
+
+```bash
+./verify.sh https://9router.<your-tailnet>.ts.net   # Tailscale
+./verify.sh http://127.0.0.1:20128                  # SSH, tunnel up
+./verify.sh http://100.64.0.2:80                    # Headscale, mesh IP
+```
+
+Expected: `/v1/models` returns 401, `/api/mcp/` returns 403, `/api/settings`
+returns 401, `/dashboard` returns 307. A bare hostname is accepted and assumed
+to be HTTPS. `./verify.sh --self-test` checks the script itself without
+contacting a server.
+
+**A 200 on the first check means the loopback hop leaked local privileges.**
+Anyone who can reach 9Router can then spend your provider subscriptions and
+read the tokens. Stop and fix it before connecting anything.
+
+On the VPS, confirm what is published to the host:
+
+```bash
+ss -tlnp | grep -E '20128|8787'
+# Tailscale mode:  no output.
+# SSH mode:        127.0.0.1:20128 only.
+# Headscale mode:  no output (9router in sidecar netns).
+```
+
+## Post-install: connect your CLI and IDE
+
+1. Open your base URL in a browser, log in with `INITIAL_PASSWORD`, and change
+   the password immediately.
+2. Connect providers: Dashboard and then Providers.
+3. Generate an API key: Dashboard and then API keys.
+4. Enable Headroom: Endpoint and then Token Saver and then Headroom. The URL
+   should already read `http://headroom:8787`; recheck status, then enable.
+
+Point clients at `<base-url>/v1` with that API key. Claude Code:
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:20128     # or the ts.net / mesh IP URL
+export ANTHROPIC_AUTH_TOKEN=<9router key>
+```
+
+Hermes, via `hermes model` and then **Custom endpoint**, or directly:
+
+```yaml
+# ~/.hermes/config.yaml
+providers:
+  9router:
+    api: http://127.0.0.1:20128/v1
+    key_env: NINEROUTER_API_KEY
+    transport: chat_completions
+
+model:
+  default: <model id from the 9Router dashboard>
+  provider: custom:9router
+```
+
+```bash
+# ~/.hermes/.env
+NINEROUTER_API_KEY=<9router key>
+```
+
+> Cursor routes some requests through its own backend, which cannot reach a
+> private endpoint. That is a Cursor limitation and applies to all three
+> modes.
+
+## Auto-update
+
+You cannot webhook this. Docker Hub webhooks are configured by the repository
+owner, and `decolua/9router` is not yours, so there is no push event to
+subscribe to. Watchtower would work but requires mounting the Docker socket,
+which is root-equivalent on a host running your other projects. Not worth it.
+
+Polling instead. **Dokploy and then Schedule Jobs and then Create**:
+
+- Schedule: `0 */6 * * *` (adjust to taste)
+- Command:
+
+  ```bash
+  curl -fsS -X POST 'https://<your-dokploy-panel>/api/compose.deploy' \
+    -H 'x-api-key: <dokploy-api-key>' \
+    -H 'Content-Type: application/json' \
+    -d '{"composeId":"<composeId from the project URL>"}'
+  ```
+
+`pull_policy: always` in all three compose files makes the re-pull explicit
+rather than incidental. Confirm the exact endpoint name against your panel's
+`/swagger`. It has been `compose.deploy` in recent versions.
+
+**Understand what you turned on.** Tracking `:latest` with an unattended
+redeploy means an upstream compromise reaches your provider OAuth tokens
+without review. If that stops being acceptable, pin a version tag and drop
+the scheduled job.
+
+## Stopping, restarting, and switching modes
+
+Dokploy Stop halts the containers; volumes persist.
+
+| Volume | Contents |
+|---|---|
+| `9router-data` | `db/data.sqlite`, provider OAuth tokens, API keys, `jwt-secret`, certs, backups |
+| `tailscale-state` | Tailscale/Headscale modes: node identity, serve config, TLS certificate (Tailscale mode only) |
+| `headscale-data` | Headscale mode only: control plane database, noise private key, DERP private key |
+
+Start returns the same configuration, and in Tailscale mode the same hostname
+and certificate. The auth key is consumed only on first run. In Headscale
+mode, the Headscale database and keys persist, so the control plane survives
+restarts without re-initialization.
+
+Do not delete these volumes. `9router-data` is your entire configuration; if
+`JWT_SECRET` were ever unset, it would also hold the auto-generated secret.
+
+**Switching modes:** Change **Compose Path** and redeploy. All three files
+declare a `9router-data` volume with the same name, so within one Dokploy
+project your database, provider connections, and API keys carry across. Adjust
+`TS_AUTHKEY` / `HS_AUTHKEY` accordingly, redo the Tailscale- or Headscale-only
+steps if moving to those modes, and run `verify.sh` again against the new base
+URL.
+
+## Contents
+
+| File | Purpose |
+| --- | --- |
+| `docker-compose.yml` | Tailscale mode: sidecar, 9Router, Headroom |
+| `docker-compose.ssh.yml` | SSH mode: 9Router bound to host loopback, Headroom |
+| `docker-compose.headscale.yml` | Headscale mode: Headscale + sidecar, 9Router, Headroom |
+| `serve.json` | `tailscale serve` config (Tailscale mode), mounted via Dokploy |
+| `serve-headscale.json` | `tailscale serve` config (Headscale mode, HTTP), mounted via Dokploy |
+| `headscale-config.yaml` | Headscale server config, mounted via Dokploy |
+| `.env.example` | The required secrets |
+| `verify.sh` | Post-deploy assertions that privileges did not leak |
+| `DEPLOY.md` | Full runbook for all three modes |
+| `docs/DESIGN.md` | Design rationale, upstream review, rejected alternatives |
 
 ## Requirements
 
@@ -314,4 +844,4 @@ This project is not affiliated with or endorsed by any of them.
 
 ## License
 
-[MIT](LICENSE) © Ali Rajabpour Sanati
+[MIT](LICENSE) (c) Ali Rajabpour Sanati
