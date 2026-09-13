@@ -164,7 +164,7 @@ services:
         echo "=== Creating pre-auth key ==="
         RAW=$$(headscale --config /shared/config.yaml preauthkeys create --user $$USER_ID --reusable --expiration 87600h 2>&1)
         echo "Raw output: $$RAW"
-        KEY=$$(echo "$$RAW" | grep -o 'tskey-auth-[a-zA-Z0-9_-]*')
+        KEY=$$(echo "$$RAW" | grep -oE '(tskey|hskey)-auth-[a-zA-Z0-9_-]*')
         if [ -n "$$KEY" ]; then
           echo "$$KEY" > /shared/preauthkey
           echo "========================================"
