@@ -197,6 +197,26 @@ services:
       - sh
       - -c
       - |
+        # Write the serve config inline so no file mount is needed.
+        mkdir -p /config
+        cat > /config/serve-headscale.json << 'ENDOFSERVE'
+        {
+          "TCP": {
+            "80": {
+              "HTTP": true
+            }
+          },
+          "Web": {
+            "*:80": {
+              "Handlers": {
+                "/": {
+                  "Proxy": "http://127.0.0.1:20128"
+                }
+              }
+            }
+          }
+        }
+        ENDOFSERVE
         if [ -z "$${TS_AUTHKEY:-}" ]; then
           echo "Waiting for pre-auth key from Headscale..."
           while [ ! -f /shared/preauthkey ] || [ -z "$$(cat /shared/preauthkey 2>/dev/null)" ]; do sleep 2; done
@@ -212,7 +232,6 @@ services:
       TS_EXTRA_ARGS: --login-server=https://${HEADSCALE_DOMAIN} --reset
     volumes:
       - tailscale-state:/var/lib/tailscale
-      - ../files/serve-headscale.json:/config/serve-headscale.json:ro
       - shared:/shared:ro
 
   9router:
