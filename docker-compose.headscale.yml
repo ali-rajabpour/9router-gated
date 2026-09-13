@@ -161,6 +161,8 @@ services:
             echo "Deleting stale node: $$DELETE_NODE_ID"
             headscale --config /shared/config.yaml nodes delete --identifier $$DELETE_NODE_ID --force 2>&1
           fi
+          echo "=== Current nodes ==="
+          headscale --config /shared/config.yaml nodes list 2>&1
           exit 0
         fi
         echo "Creating Headscale user: ${HEADSCALE_USER:-9router}"
