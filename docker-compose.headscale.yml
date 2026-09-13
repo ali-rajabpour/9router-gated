@@ -169,15 +169,13 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        # Forward to this container's bridge address, never 127.0.0.1. A raw
-        # TCP forward carries no X-Forwarded-For, so a connection from loopback
-        # looks local to 9router and unlocks keyless /v1, password reset and
-        # the process-spawning routes for every mesh peer. From the bridge
-        # address it is an ordinary remote client.
-        ip=$$(ip -4 -o addr show eth0 | awk '{print $$4}' | cut -d/ -f1)
-        [ -n "$$ip" ] || { echo "no eth0 address"; exit 1; }
+        # Forward over the Docker bridge, never to 127.0.0.1. A raw TCP forward
+        # carries no X-Forwarded-For, so a connection from loopback looks local
+        # to 9router and unlocks keyless /v1, password reset and the
+        # process-spawning routes for every mesh peer. Arriving from this
+        # container's bridge address it is an ordinary remote client.
         mkdir -p /config
-        printf '{"TCP":{"80":{"TCPForward":"%s:20128"}}}\n' "$$ip" > /config/serve.json
+        echo '{"TCP":{"80":{"TCPForward":"9router:20128"}}}' > /config/serve.json
         if [ -s /router/key ]; then export TS_AUTHKEY="$$(cat /router/key)"; fi
         exec /usr/local/bin/containerboot
     environment:
@@ -199,14 +197,8 @@ services:
   9router:
     image: ${NINEROUTER_IMAGE:-decolua/9router:0.5.75}
     restart: unless-stopped
-    network_mode: "service:sidecar"
-    # A container sharing another's netns stays attached to the old namespace
-    # when that container restarts, and becomes unreachable. restart: true
-    # makes compose restart 9router whenever it restarts the sidecar.
-    depends_on:
-      sidecar:
-        condition: service_started
-        restart: true
+    # Own network namespace on the stack's private bridge. No ports are
+    # published; the sidecar is the only way in from the mesh.
     volumes:
       - 9router-data:/app/data
     environment:
@@ -226,8 +218,8 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # Deliberately outside the sidecar netns. Inside it, this third-party image
-  # could reach 9router over 127.0.0.1 and be treated as local.
+  # Separate container, so this third-party image reaches 9router over the
+  # bridge like any remote client, never over 127.0.0.1.
   headroom:
     image: ${HEADROOM_IMAGE:-ghcr.io/headroomlabs-ai/headroom@sha256:35b799e94eef4644cb15a2e695b4b99698fe7668614623e9338cb10c10ececf9}
     restart: unless-stopped
