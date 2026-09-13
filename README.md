@@ -575,8 +575,8 @@ certificate in Dokploy and leave `CERT_RESOLVER` empty. With DNS only, set
 | `INITIAL_PASSWORD` | The base64 string from `openssl rand -base64 24` | Yes |
 | `HEADSCALE_DOMAIN` | `headscale.yourdomain.com` | Yes |
 | `CERT_RESOLVER` | Empty for an uploaded certificate, `letsencrypt` for ACME | No |
-| `DEVICE_KEY` | `true` only to print a CLI enrollment key, then remove it | No |
-| `DELETE_NODE_IDS` | Node IDs to delete, space-separated, then remove it | No |
+| `NEW_DEVICE` | `false`. Set `true` only to print a CLI enrollment key | No |
+| `DELETE_NODE_IDS` | Empty. Node IDs to delete, space-separated, then empty again | No |
 
 ### Step 4: Deploy
 
@@ -605,9 +605,9 @@ ID | Hostname | Name    | ... | User    | ...
 
 **CLI (Linux, or macOS with the CLI):** the same flow works with
 `tailscale up --login-server=https://headscale.yourdomain.com --accept-dns=false`.
-Alternatively set `DEVICE_KEY=true`, redeploy, and run the `tailscale up ...
+Alternatively set `NEW_DEVICE=true`, redeploy, and run the `tailscale up ...
 --auth-key=...` line printed in the `headscale` log. Each printed key enrolls
-one device and expires in an hour. Remove `DEVICE_KEY` afterwards.
+one device and expires in an hour. Set `NEW_DEVICE=false` afterwards.
 
 Then, from the device:
 
@@ -623,7 +623,7 @@ no access at all.
 ### Step 6: Remove a device
 
 Read its ID from the node list in the `headscale` logs, set
-`DELETE_NODE_IDS=<id>`, redeploy, then remove the variable. On the device, run
+`DELETE_NODE_IDS=<id>`, redeploy, then empty it again. On the device, run
 `tailscale logout`.
 
 ### Starting over, and stale devices

@@ -100,8 +100,8 @@ TS_AUTHKEY=tskey-auth-...        # Tailscale mode only
 HEADSCALE_DOMAIN=headscale.example.com  # Headscale mode only
 CERT_RESOLVER=                   # Headscale mode. Empty for uploaded certs
                                  # (e.g. Cloudflare Origin), "letsencrypt" for ACME.
-DEVICE_KEY=true                  # Headscale mode, one-shot, see C3
-DELETE_NODE_IDS=                 # Headscale mode, one-shot, see C4
+NEW_DEVICE=false                 # Headscale mode, true to print a key, see C3
+DELETE_NODE_IDS=                 # Headscale mode, node IDs to delete, see C4
 ```
 
 `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when it is
@@ -387,7 +387,8 @@ JWT_SECRET=<openssl rand -hex 32>
 INITIAL_PASSWORD=<a real password>
 HEADSCALE_DOMAIN=headscale.yourdomain.com
 CERT_RESOLVER=
-DEVICE_KEY=true
+NEW_DEVICE=false
+DELETE_NODE_IDS=
 ```
 
 The deploy refuses to start if any of the first three is missing. On start
@@ -398,7 +399,7 @@ the `headscale` container:
 3. If the sidecar has never registered, creates a single-use, one-hour key
    for `Routers` and hands it to the sidecar over a private volume. That key
    is never printed.
-4. With `DEVICE_KEY=true`, creates a single-use, one-hour key for `Devices`
+4. With `NEW_DEVICE=true`, creates a single-use, one-hour key for `Devices`
    and prints a ready `tailscale up` command.
 5. Prints the node list, with IDs.
 
@@ -420,10 +421,10 @@ Tailscale apps (macOS, Windows, Android, iOS):
    `--user Devices`.
 
 CLI clients can do the same with `tailscale up --login-server=... --accept-dns=false`,
-or use a pre-auth key: set `DEVICE_KEY=true`, redeploy, and run the
+or use a pre-auth key: set `NEW_DEVICE=true`, redeploy, and run the
 `tailscale up ... --auth-key=...` line printed in the `headscale` log. Each key
-enrolls one device and expires after an hour. Clear `DEVICE_KEY` afterwards so
-a key is not printed on every start.
+enrolls one device and expires after an hour. Set `NEW_DEVICE=false`
+afterwards so a key is not printed on every start.
 
 Always use `--user Devices`; a node under any other user has no access.
 
@@ -634,7 +635,7 @@ generated automatically). Run `verify.sh` again against the new base URL.
 - Headscale mode: the control plane is the one public service in the stack.
   It holds no 9Router secrets and its gRPC API listens on loopback only, but
   anyone who reads a printed device key within its hour can enroll one
-  device. Clear `DEVICE_KEY` after use, and keep the VPS SSH key-only.
+  device. Set `NEW_DEVICE=false` after use, and keep the VPS SSH key-only.
 - `REQUIRE_API_KEY` appears in upstream's `.env.example` and is dead code: no
   references anywhere in `src/`. API-key enforcement on `/v1` for remote
   callers is unconditional. Do not rely on that variable.

@@ -10,9 +10,9 @@
 # No TCP or UDP between devices, and the router can reach none of them.
 #
 # One-shot actions, set in Dokploy's Environment tab and redeploy:
-#   DEVICE_KEY=true         print a single-use key for Devices, valid 1 hour
+#   NEW_DEVICE=true         print a single-use key for Devices, valid 1 hour
 #   DELETE_NODE_IDS="3 4"   delete nodes by ID (IDs are in the headscale log)
-# Clear the variable and redeploy afterwards.
+# Afterwards set NEW_DEVICE=false and empty DELETE_NODE_IDS, then redeploy.
 services:
   # Control plane + embedded DERP relay. The only public service in the stack.
   # The -debug image is used because it ships busybox, which lets this one
@@ -116,11 +116,11 @@ services:
           key Routers > /router/key
         fi
 
-        if [ "$$DEVICE_KEY" = true ]; then
+        if [ "$$NEW_DEVICE" = true ]; then
           echo "========================================"
           echo "Single-use device key, valid 1 hour:"
           echo "  tailscale up --login-server=https://${HEADSCALE_DOMAIN} --accept-dns=false --auth-key=$$(key Devices)"
-          echo "Clear DEVICE_KEY in Dokploy when done."
+          echo "Set NEW_DEVICE=false in Dokploy when done."
           echo "========================================"
         fi
 
@@ -129,7 +129,7 @@ services:
         wait $$pid
         wait $$pid
     environment:
-      DEVICE_KEY: ${DEVICE_KEY:-}
+      NEW_DEVICE: ${NEW_DEVICE:-}
       DELETE_NODE_IDS: ${DELETE_NODE_IDS:-}
     volumes:
       - headscale-data:/var/lib/headscale
