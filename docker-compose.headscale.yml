@@ -155,6 +155,12 @@ services:
             headscale --config /shared/config.yaml users create $$APPROVE_USER 2>&1 || echo "User may already exist"
             headscale --config /shared/config.yaml auth register --auth-id $$APPROVE_AUTH_ID --user $$APPROVE_USER 2>&1
           fi
+          # One-time: delete a stale node by ID.
+          # Run via: DELETE_NODE_ID=<id>
+          if [ -n "$${DELETE_NODE_ID:-}" ]; then
+            echo "Deleting stale node: $$DELETE_NODE_ID"
+            headscale --config /shared/config.yaml nodes delete --id $$DELETE_NODE_ID 2>&1
+          fi
           exit 0
         fi
         echo "Creating Headscale user: ${HEADSCALE_USER:-9router}"
@@ -183,6 +189,7 @@ services:
     environment:
       - APPROVE_AUTH_ID=${APPROVE_AUTH_ID:-}
       - APPROVE_USER=${APPROVE_USER:-}
+      - DELETE_NODE_ID=${DELETE_NODE_ID:-}
     depends_on:
       - headscale
 
