@@ -89,7 +89,9 @@ services:
           sleep 1
         done
 
-        uid() { headscale users list -o json | tr -d ' \n' | grep -o "\"id\":[0-9]*,\"name\":\"$$1\"" | grep -o '[0-9][0-9]*' | head -1; }
+        # No jq in busybox: drop quotes and whitespace, one object per line,
+        # then take the id from the line whose name matches.
+        uid() { headscale users list -o json | tr -d ' \n\t"' | tr '{}' '\n\n' | grep -E "(^|,)name:$$1(,|$$)" | grep -oE '(^|,)id:[0-9]+' | grep -oE '[0-9]+' | head -1; }
         key() { headscale preauthkeys create --user "$$(uid $$1)" --expiration 1h | grep -o 'hskey-auth-[A-Za-z0-9_-]*'; }
 
         for u in Routers Devices; do
