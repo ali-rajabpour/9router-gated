@@ -5,49 +5,42 @@
 # Fully automated: the Headscale container creates the user and pre-auth key
 # on first start and writes the key to a shared volume. The Tailscale sidecar
 # picks it up automatically. No SSH to the VPS needed. The key is also
-# printed to the Headscale container logs for visibility.
+# printed to the Headscale setup container logs for visibility.
 #
 # All configuration is via environment variables - no file editing needed.
+#
+# The headscale production image is distroless (no shell), so we use:
+# 1. An alpine init container to substitute HEADSCALE_DOMAIN in the config
+# 2. The production headscale image with command args (no shell needed)
+# 3. The headscale debug image (has busybox) for the user/key setup script
 services:
-  # Headscale control plane + embedded DERP relay. Public on your domain
-  # via Traefik. This is the only public-facing service in the stack.
-  # On first start, it also creates the Headscale user and pre-auth key
-  # automatically, writing the key to a shared volume for the sidecar.
+  # 1. Alpine init container: substitutes HEADSCALE_DOMAIN in the config
+  #    template and writes the result to a shared volume. Exits immediately.
+  headscale-init:
+    image: alpine:3.20
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - "sed 's|HEADSCALE_DOMAIN|${HEADSCALE_DOMAIN}|g' /template/config.yaml > /shared/config.yaml && echo 'Headscale config written'"
+    volumes:
+      - ../files/headscale-config.yaml.template:/template/config.yaml:ro
+      - shared:/shared
+
+  # 2. Headscale control plane + embedded DERP relay. Public on your domain
+  #    via Traefik. This is the only public-facing service in the stack.
+  #    Uses command args (no shell) since the image is distroless.
   headscale:
     image: ${HEADSCALE_IMAGE:-headscale/headscale:0.29.3}
     restart: unless-stopped
-    # Override the image's ENTRYPOINT ["headscale"] so we can run a shell
-    # script that substitutes HEADSCALE_DOMAIN, starts headscale, then
-    # auto-creates the user and pre-auth key.
-    entrypoint:
-      - sh
-      - -c
-      - |
-        sed "s|HEADSCALE_DOMAIN|${HEADSCALE_DOMAIN}|g" /etc/headscale/config-template.yaml > /etc/headscale/config.yaml
-        headscale serve --config /etc/headscale/config.yaml &
-        HEADSCALE_PID=$$!
-        trap "kill $$HEADSCALE_PID" TERM INT
-        until headscale --config /etc/headscale/config.yaml health 2>/dev/null; do sleep 2; done
-        headscale --config /etc/headscale/config.yaml users create ${HEADSCALE_USER:-9router} 2>/dev/null || true
-        if [ ! -f /shared/preauthkey ] || [ -z "$$(cat /shared/preauthkey)" ]; then
-          KEY=$$(headscale --config /etc/headscale/config.yaml preauthkeys create --user ${HEADSCALE_USER:-9router} --reusable 2>&1 | grep -o 'tskey-auth-[a-zA-Z0-9_-]*')
-          echo "$$KEY" > /shared/preauthkey
-          echo "========================================"
-          echo "Headscale pre-auth key created: $$KEY"
-          echo "The Tailscale sidecar will use it automatically."
-          echo "========================================"
-        else
-          echo "Using existing pre-auth key from previous deploy"
-        fi
-        wait $$HEADSCALE_PID
+    command: ["serve", "--config", "/shared/config.yaml"]
     expose:
       - "8080"
     networks:
       - dokploy-network
     volumes:
       - headscale-data:/var/lib/headscale
-      - ../files/headscale-config.yaml.template:/etc/headscale/config-template.yaml:ro
-      - shared:/shared
+      - shared:/shared:ro
     healthcheck:
       test: ["CMD", "headscale", "health"]
       interval: 30s
@@ -58,6 +51,9 @@ services:
       resources:
         limits:
           memory: 512m
+    depends_on:
+      headscale-init:
+        condition: service_completed_successfully
     labels:
       - traefik.enable=true
       - traefik.http.routers.headscale.rule=Host(`${HEADSCALE_DOMAIN}`)
@@ -71,14 +67,46 @@ services:
       - traefik.http.routers.headscale-http.middlewares=headscale-https-redirect
       - traefik.http.middlewares.headscale-https-redirect.redirectscheme.scheme=https
 
-  # Tailscale sidecar, pointed at your Headscale instead of Tailscale's
-  # hosted control plane. Userspace mode: no NET_ADMIN, no /dev/net/tun.
-  # serve runs in HTTP mode (no HTTPS cert - Headscale does not support
-  # per-node cert provisioning). WireGuard encrypts the transport; the
-  # HTTP layer is just a proxy.
+  # 3. Setup container (debug image with busybox shell): waits for headscale
+  #    to be healthy, then creates the user and pre-auth key automatically.
+  #    The key is written to a shared volume and printed to container logs.
+  #    Exits after completing. On redeploys, skips if key already exists.
+  headscale-setup:
+    image: ${HEADSCALE_DEBUG_IMAGE:-headscale/headscale:0.29.3-debug}
+    restart: "no"
+    entrypoint: ["/busybox/sh", "-c"]
+    command:
+      - |
+        for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+          headscale --config /shared/config.yaml health 2>/dev/null && break
+          echo "Waiting for Headscale to be ready..."
+          sleep 2
+        done
+        headscale --config /shared/config.yaml users create ${HEADSCALE_USER:-9router} 2>/dev/null || true
+        if [ ! -f /shared/preauthkey ] || [ -z "$$(cat /shared/preauthkey 2>/dev/null)" ]; then
+          KEY=$$(headscale --config /shared/config.yaml preauthkeys create --user ${HEADSCALE_USER:-9router} --reusable 2>&1 | grep -o 'tskey-auth-[a-zA-Z0-9_-]*')
+          echo "$$KEY" > /shared/preauthkey
+          echo "========================================"
+          echo "Headscale pre-auth key created: $$KEY"
+          echo "The Tailscale sidecar will use it automatically."
+          echo "========================================"
+        else
+          echo "Using existing pre-auth key from previous deploy"
+        fi
+    volumes:
+      - headscale-data:/var/lib/headscale
+      - shared:/shared
+    depends_on:
+      - headscale
+
+  # 4. Tailscale sidecar, pointed at your Headscale instead of Tailscale's
+  #    hosted control plane. Userspace mode: no NET_ADMIN, no /dev/net/tun.
+  #    serve runs in HTTP mode (no HTTPS cert - Headscale does not support
+  #    per-node cert provisioning). WireGuard encrypts the transport; the
+  #    HTTP layer is just a proxy.
   #
-  # If HS_AUTHKEY is not set, the sidecar waits for the pre-auth key file
-  # written by the Headscale container above. Fully automatic.
+  #    If HS_AUTHKEY is not set, the sidecar waits for the pre-auth key file
+  #    written by the headscale-setup container above. Fully automatic.
   tailscale:
     image: ${TAILSCALE_IMAGE:-tailscale/tailscale:latest}
     restart: unless-stopped
@@ -126,6 +154,9 @@ services:
       HEADROOM_URL: http://headroom:8787
       ENABLE_REQUEST_LOGS: "false"
 
+  # Deliberately NOT in the tailscale netns. Same rationale as Tailscale
+  # mode: sharing it would let this third-party image reach 9router over
+  # 127.0.0.1 with no X-Forwarded-For, unlocking local privileges.
   headroom:
     image: ${HEADROOM_IMAGE:-ghcr.io/chopratejas/headroom:latest}
     restart: unless-stopped
