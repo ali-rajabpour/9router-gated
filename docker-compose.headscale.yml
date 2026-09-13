@@ -228,6 +228,11 @@ services:
     restart: unless-stopped
     expose:
       - "8787"
+    environment:
+      # Headroom serves /v1/compress to loopback callers only, and 9router
+      # calls it across the bridge without a token. Only 9router and the
+      # sidecar share this network, and no mesh peer can reach port 8787.
+      HEADROOM_COMPRESS_ALLOW_REMOTE: "1"
     security_opt:
       - no-new-privileges:true
 
