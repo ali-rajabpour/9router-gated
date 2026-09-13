@@ -155,7 +155,7 @@ services:
         echo "=== Listing users to find ID ==="
         USERS=$$(headscale --config /shared/config.yaml users list --output json 2>&1)
         echo "Users: $$USERS"
-        USER_ID=$$(echo "$$USERS" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+        USER_ID=$$(echo "$$USERS" | sed 's/ //g' | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
         if [ -z "$$USER_ID" ]; then
           echo "ERROR: Could not find user ID"
           exit 1
