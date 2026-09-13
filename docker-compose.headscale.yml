@@ -148,12 +148,6 @@ services:
           echo "Use this to join client machines to the mesh:"
           echo "  tailscale up --login-server=https://${HEADSCALE_DOMAIN} --auth-key=$$(cat /shared/preauthkey)"
           echo "========================================"
-          # Auto-approve any pending interactive auth requests (e.g. Android
-          # app does interactive login instead of using a pre-auth key).
-          for authid in $$(headscale --config /shared/config.yaml auth list --output json 2>/dev/null | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//'); do
-            echo "Approving pending auth request: $$authid"
-            headscale --config /shared/config.yaml auth register --auth-id $$authid --user ${HEADSCALE_USER:-9router} 2>&1 || true
-          done
           exit 0
         fi
         echo "Creating Headscale user: ${HEADSCALE_USER:-9router}"
