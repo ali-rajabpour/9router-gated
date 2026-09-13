@@ -1,25 +1,28 @@
 # Deploying 9Router on Dokploy without public ingress
 
-Two access modes, same stack, same data. Pick one at deploy time by choosing
-which compose file Dokploy builds. Neither publishes anything to the internet,
-neither creates a Traefik route or a public DNS record, and neither touches
-your other projects on the VPS.
+Three access modes, same stack, same data. Pick one at deploy time by choosing
+which compose file Dokploy builds. None publishes 9Router to the internet, none
+creates a Traefik route for 9Router, and none touches your other projects on the
+VPS. (Headscale mode adds one public service — the Headscale control plane —
+but 9Router itself stays private.)
 
-| | Tailscale | SSH tunnel |
-| --- | --- | --- |
-| Compose file | `docker-compose.yml` | `docker-compose.ssh.yml` |
-| Client URL | `https://9router.<tailnet>.ts.net` | `http://127.0.0.1:20128` |
-| Transport | WireGuard + TLS from `tailscale serve` | SSH |
-| Server-side setup | Tailscale sidecar, ACLs, file mount | Nothing beyond the compose file |
-| Client-side setup | Install Tailscale, log in | Persistent `ssh -L`, one per machine |
-| Real TLS certificate | Yes | No, transport is SSH |
-| Extra layer of auth | Tailnet membership | VPS SSH credentials |
-| Works where Tailscale is filtered | No | Yes |
+| | Tailscale | SSH tunnel | Headscale |
+| --- | --- | --- | --- |
+| Compose file | `docker-compose.yml` | `docker-compose.ssh.yml` | `docker-compose.headscale.yml` |
+| Client URL | `https://9router.<tailnet>.ts.net` | `http://127.0.0.1:20128` | `http://100.64.0.2:80` |
+| Transport | WireGuard + TLS from `tailscale serve` | SSH | WireGuard + HTTP from `tailscale serve` |
+| Server-side setup | Tailscale sidecar, ACLs, file mount | Nothing beyond the compose file | Headscale container, sidecar, two file mounts |
+| Client-side setup | Install Tailscale, log in | Persistent `ssh -L`, one per machine | Install Tailscale, point at Headscale, log in |
+| Real TLS certificate | Yes | No, transport is SSH | No, HTTP over WireGuard |
+| Extra layer of auth | Tailnet membership | VPS SSH credentials | Mesh membership |
+| Works where Tailscale is filtered | No | Yes | Yes (your domain, not `*.tailscale.com`) |
+| New public service on VPS | No | No | Yes (Headscale control plane) |
 
 **Default to Tailscale.** It is less to run day to day, it gives you a real
 HTTPS URL that every client accepts, and tailnet membership is a genuine
-second gate in front of 9Router's own password and API key. Use SSH when
-Tailscale cannot connect.
+second gate in front of 9Router's own password and API key. Use Headscale when
+Tailscale is filtered and you want a mesh rather than per-machine tunnels. Use
+SSH when Tailscale is filtered and you want zero extra infrastructure.
 
 ## Is Tailscale reachable from your network?
 
@@ -47,14 +50,14 @@ curl -sS -o /dev/null -k --max-time 8 \
 
 ## Why this shape
 
-Both modes reach 9Router over a loopback hop, and 9Router grants **local**
+All three modes reach 9Router over a loopback hop, and 9Router grants **local**
 requests privileged access: keyless `/v1`, password reset, process-spawning
 routes. Getting that wrong hands every visitor those privileges, so each mode
 has to defeat it differently.
 
-- **Tailscale.** `tailscale serve` terminates TLS and proxies to
+- **Tailscale / Headscale.** `tailscale serve` proxies to
   `127.0.0.1:20128` inside a shared network namespace, but it sets
-  `X-Forwarded-For` to the client's tailnet address unconditionally
+  `X-Forwarded-For` to the client's mesh address unconditionally
   (`ipn/ipnlocal/serve.go`, `addProxyForwardedHeaders`). 9Router's
   `custom-server.js` strips any client-supplied forwarding headers before
   stamping its own, so the value cannot be spoofed.
@@ -63,7 +66,7 @@ has to defeat it differently.
   bridge gateway address (`172.x`), not `127.0.0.1`. See the caveat in
   section B4, which is why `verify.sh` is not optional.
 
-Headroom stays on the docker bridge in both modes rather than sharing a
+Headroom stays on the docker bridge in all modes rather than sharing a
 namespace with 9Router, so a compromise of that third-party image cannot reach
 it over loopback.
 
@@ -73,13 +76,15 @@ it over loopback.
 
 1. **Create → Compose**. Name it `9router`.
 2. Point it at this repository.
-3. **Compose Path**: `./docker-compose.yml` for Tailscale, or
-   `./docker-compose.ssh.yml` for SSH. This one field is the mode switch.
+3. **Compose Path**: `./docker-compose.yml` for Tailscale,
+   `./docker-compose.ssh.yml` for SSH, or `./docker-compose.headscale.yml` for
+   Headscale. This one field is the mode switch.
 4. **Advanced → Isolated Deployments: OFF.** It injects a `networks:` key into
    every service, which is invalid alongside `network_mode` and will fail the
-   Tailscale deploy.
-5. **Do not add a domain.** No Traefik router, no `dokploy-network`. That is
-   the point.
+   Tailscale and Headscale deploys.
+5. **Do not add a domain to 9Router.** No Traefik router, no `dokploy-network`
+   for 9Router. That is the point. (Headscale mode uses `dokploy-network` for
+   the Headscale container only, which is the one public service.)
 
 ## 2. Environment variables
 
@@ -89,6 +94,8 @@ it over loopback.
 JWT_SECRET=<openssl rand -hex 32>
 INITIAL_PASSWORD=<a real password>
 TS_AUTHKEY=tskey-auth-...        # Tailscale mode only
+HEADSCALE_DOMAIN=headscale.example.com  # Headscale mode only
+HS_AUTHKEY=...                   # Headscale mode only
 ```
 
 `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when it is
@@ -333,6 +340,133 @@ grep -i userland /etc/docker/daemon.json 2>/dev/null   # expect no output
 
 ---
 
+# Path C: Headscale
+
+For networks where `*.tailscale.com` is SNI-filtered. You run your own
+Tailscale control plane on your domain, so the filter does not match. The
+Tailscale client on your machines points at your Headscale instead of
+Tailscale's hosted control plane. 9Router is reachable only from the mesh,
+never public.
+
+This is more infrastructure than SSH mode (one extra container + a public
+domain), but less per-machine friction (join the mesh once, no tunnel to
+maintain). Use it when Tailscale is filtered and you want a mesh VPN.
+
+## C1. DNS and domain
+
+Point a DNS A record at your VPS:
+
+```
+headscale.yourdomain.com  A  <vps-ip>
+```
+
+Traefik (managed by Dokploy) terminates TLS on this hostname.
+
+## C2. File mounts
+
+**Advanced → Volumes → Add File Mount**. Two mounts, both required:
+
+| Field | Value |
+| --- | --- |
+| **File Path** | `serve-headscale.json` |
+| **Content** | the contents of `serve-headscale.json` from this repository |
+
+| Field | Value |
+| --- | --- |
+| **File Path** | `headscale-config.yaml` |
+| **Content** | the contents of `headscale-config.yaml`, **with `HEADSCALE_DOMAIN` on line 5 replaced by your actual domain** |
+
+Same bare-filename convention as `serve.json` in Tailscale mode. Dokploy writes
+them to `<project>/files/`, which is why the compose file mounts them as
+`../files/serve-headscale.json` and `../files/headscale-config.yaml`.
+
+**You must edit `headscale-config.yaml` before mounting it.** Headscale reads
+the config file literally — no environment variable substitution. Replace
+`HEADSCALE_DOMAIN` on line 5 with e.g. `https://headscale.yourdomain.com`.
+
+## C3. First deploy: Headscale only
+
+Set **Compose Path** to `./docker-compose.headscale.yml`, set `JWT_SECRET`,
+`INITIAL_PASSWORD`, and `HEADSCALE_DOMAIN` in the Environment tab. Leave
+`HS_AUTHKEY` empty for now. Deploy.
+
+The Headscale container comes up. The Tailscale sidecar will fail to join (no
+auth key yet) — that is expected. Confirm Headscale is reachable:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://headscale.yourdomain.com/health
+# expect 200
+```
+
+## C4. Create a Headscale user and pre-auth key
+
+```bash
+# find the headscale container name
+docker ps --format '{{.Names}}' | grep -i headscale
+
+# create a user
+docker exec <name> headscale users create 9router
+
+# generate a reusable pre-auth key
+docker exec <name> headscale preauthkeys create --user 9router --reusable
+```
+
+Copy the key. Set it as `HS_AUTHKEY` in Dokploy's Environment tab. Redeploy.
+
+## C5. Confirm the sidecar joined
+
+```bash
+docker ps --format '{{.Names}}' | grep -i tailscale
+docker exec <name> tailscale status
+# expect: node active, has a 100.64.0.x address
+
+docker exec <name> tailscale serve status
+# expect: http://100.64.0.x:80 -> http://127.0.0.1:20128
+```
+
+Note the mesh IP (`100.64.0.x`). That is your base URL.
+
+## C6. Enroll client machines
+
+On each client, install the Tailscale client and join your Headscale:
+
+```bash
+tailscale up --login-server https://headscale.yourdomain.com
+```
+
+Approve the node in Headscale if you enabled node approval:
+
+```bash
+docker exec <name> headscale nodes list
+docker exec <name> headscale nodes approve --node <id>
+```
+
+## C7. The HTTPS gap
+
+Headscale does not support per-node TLS certificate provisioning
+(`tailscale cert` / HTTPS serve). So `tailscale serve` runs in **HTTP mode**
+on port 80, and `AUTH_COOKIE_SECURE` is `false`. WireGuard encrypts the
+transport between mesh nodes, so the traffic is encrypted in transit — but
+clients that require an `https://` base URL will not work without a local
+TLS terminator. For CLI tools (Claude Code, Hermes, curl) this is fine; they
+accept `http://` URLs. For browsers, the dashboard works over HTTP on the
+mesh.
+
+If you need HTTPS on the client side, run a local reverse proxy (Caddy, nginx)
+on the client machine that terminates TLS and forwards to the mesh IP.
+
+## C8. DERP and censorship resistance
+
+The embedded DERP relay relays traffic between mesh nodes over HTTPS when
+direct WireGuard UDP cannot connect. Since Headscale and 9Router are on the
+same VPS, the relay hop adds ~zero latency. STUN (UDP 3478) is configured but
+its port is not published, so it is unreachable — clients skip direct-path
+discovery and relay through DERP over HTTPS/443. Pure HTTPS, no UDP, same
+transport as cloudflared. If your network filters `*.tailscale.com` but allows
+other HTTPS, this works.
+
+---
+
 # Verify
 
 From a client machine, against your mode's base URL:
@@ -340,6 +474,7 @@ From a client machine, against your mode's base URL:
 ```bash
 ./verify.sh https://9router.<your-tailnet>.ts.net   # Tailscale
 ./verify.sh http://127.0.0.1:20128                  # SSH, tunnel up
+./verify.sh http://100.64.0.2:80                    # Headscale, mesh IP
 ```
 
 Expected: `/v1/models` → 401, `/api/mcp/` → 403, `/api/settings` → 401,
@@ -354,8 +489,9 @@ On the VPS:
 
 ```bash
 ss -tlnp | grep -E '20128|8787'
-# Tailscale mode: no output.
+# Tailscale mode:  no output.
 # SSH mode:       127.0.0.1:20128 only.
+# Headscale mode: no output (9router in sidecar netns).
 ```
 
 # First login and clients
@@ -370,7 +506,7 @@ ss -tlnp | grep -E '20128|8787'
 Point clients at `<base-url>/v1` with that API key. Claude Code:
 
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:20128     # or the ts.net URL
+export ANTHROPIC_BASE_URL=http://127.0.0.1:20128     # or the ts.net / mesh IP URL
 export ANTHROPIC_AUTH_TOKEN=<9router key>
 ```
 
@@ -437,28 +573,35 @@ Dokploy Stop halts the containers; volumes persist.
 | Volume | Contents |
 |---|---|
 | `9router-data` | `db/data.sqlite`, provider OAuth tokens, API keys, `jwt-secret`, certs, backups |
-| `tailscale-state` | Tailscale mode only: node identity, serve config, TLS certificate |
+| `tailscale-state` | Tailscale/Headscale modes: node identity, serve config, TLS certificate (Tailscale mode only) |
+| `headscale-data` | Headscale mode only: control plane database, noise private key, DERP private key |
 
 Start returns the same configuration, and in Tailscale mode the same hostname
-and certificate. The auth key is consumed only on first run.
+and certificate. The auth key is consumed only on first run. In Headscale mode,
+the Headscale database and keys persist, so the control plane survives
+restarts without re-initialization.
 
 Do not delete these volumes. `9router-data` is your entire configuration; if
 `JWT_SECRET` were ever unset, it would also hold the auto-generated secret.
 
 # Switching modes later
 
-Change **Compose Path** and redeploy. Both files declare a `9router-data`
+Change **Compose Path** and redeploy. All three files declare a `9router-data`
 volume with the same name, so within one Dokploy project your database,
-provider connections, and API keys carry across. Adjust `TS_AUTHKEY`
-accordingly, redo the Tailscale-only steps if you are moving to Path A, and
-run `verify.sh` again against the new base URL.
+provider connections, and API keys carry across. Adjust `TS_AUTHKEY` /
+`HS_AUTHKEY` accordingly, redo the Tailscale- or Headscale-only steps if you are
+moving to Path A or C, and run `verify.sh` again against the new base URL.
 
 # Notes
 
 - Tailscale mode also exposes the dashboard at `http://<tailnet-ip>:20128`,
   bypassing `serve`. Still safe, since the peer address is non-loopback and so
   carries no local privileges, but the ACL in A1 restricts the tailnet to
-  `:443` anyway.
+  `:443` anyway. Headscale mode has the same property at `http://<mesh-ip>:20128`.
+- Headsscale mode: the Headscale control plane is the one public service in
+  the stack. Harden it: keep the VPS SSH key-only, run Fail2Ban/CrowdSec, and
+  restrict access to the Headscale API if possible. The control plane does not
+  hold 9Router secrets, but a compromise lets an attacker enroll rogue nodes.
 - `REQUIRE_API_KEY` appears in upstream's `.env.example` and is dead code: no
   references anywhere in `src/`. API-key enforcement on `/v1` for remote
   callers is unconditional. Do not rely on that variable.

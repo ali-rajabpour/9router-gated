@@ -10,6 +10,7 @@
 # Usage:
 #   ./verify.sh https://9router.<your-tailnet>.ts.net   # Tailscale mode
 #   ./verify.sh http://127.0.0.1:20128                  # SSH mode, tunnel up
+#   ./verify.sh http://100.64.0.2:80                    # Headscale mode, mesh IP
 
 set -uo pipefail
 
@@ -75,6 +76,7 @@ echo "on the VPS, confirm what is published to the host:"
 echo "  ss -tlnp | grep -E '20128|8787'"
 echo "  Tailscale mode: expect no output."
 echo "  SSH mode:       expect 127.0.0.1:20128 only, never 0.0.0.0."
+echo "  Headscale mode: expect no output (9router in sidecar netns)."
 
 [ "$fails" -eq 0 ] && echo "all checks passed" || echo "$fails check(s) failed"
 exit "$fails"

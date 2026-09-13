@@ -1,0 +1,113 @@
+# Headscale access mode. Self-hosted Tailscale control plane on your own
+# domain, for networks where *.tailscale.com is SNI-filtered. 9router is
+# reachable only from the mesh, never public.
+#
+# Trade-off vs Tailscale mode: Headscale is a new public-facing service on
+# your VPS (the control plane + DERP relay). 9router itself stays private.
+# Use this only when Tailscale's hosted control plane is unreachable.
+#
+# Requires two Dokploy File Mounts (same pattern as serve.json in Tailscale
+# mode): see DEPLOY.md §C2.
+services:
+  # Headscale control plane + embedded DERP relay. Public on your domain
+  # via Traefik. This is the only public-facing service in the stack.
+  headscale:
+    image: headscale/headscale:0.29.3
+    restart: unless-stopped
+    command: serve
+    expose:
+      - "8080"
+    networks:
+      - dokploy-network
+    volumes:
+      - headscale-data:/var/lib/headscale
+      - ../files/headscale-config.yaml:/etc/headscale/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "headscale", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.headscale.rule=Host(`${HEADSCALE_DOMAIN}`)
+      - traefik.http.routers.headscale.entrypoints=websecure
+      - traefik.http.routers.headscale.tls.certresolver=letsencrypt
+      - traefik.http.routers.headscale.service=headscale-svc
+      - traefik.http.services.headscale-svc.loadbalancer.server.port=8080
+      # HTTP → HTTPS redirect
+      - traefik.http.routers.headscale-http.rule=Host(`${HEADSCALE_DOMAIN}`)
+      - traefik.http.routers.headscale-http.entrypoints=web
+      - traefik.http.routers.headscale-http.middlewares=headscale-https-redirect
+      - traefik.http.middlewares.headscale-https-redirect.redirectscheme.scheme=https
+
+  # Tailscale sidecar, pointed at your Headscale instead of Tailscale's
+  # hosted control plane. Userspace mode: no NET_ADMIN, no /dev/net/tun.
+  # serve runs in HTTP mode (no HTTPS cert — Headscale does not support
+  # per-node cert provisioning). WireGuard encrypts the transport; the
+  # HTTP layer is just a proxy.
+  tailscale:
+    image: tailscale/tailscale:latest
+    restart: unless-stopped
+    hostname: 9router
+    environment:
+      # Headscale pre-auth key (generated via `headscale preauthkeys create`),
+      # not a Tailscale key. Same env var — the client sends it to whatever
+      # login server it's configured for.
+      TS_AUTHKEY: ${HS_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve-headscale.json
+      TS_USERSPACE: "true"
+      # --login-server is what makes the client use Headscale instead of
+      # Tailscale's hosted control plane.
+      TS_EXTRA_ARGS: --login-server=https://${HEADSCALE_DOMAIN}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ../files/serve-headscale.json:/config/serve-headscale.json:ro
+
+  9router:
+    image: decolua/9router:latest
+    pull_policy: always
+    restart: unless-stopped
+    # Shares the sidecar's netns. Reachable only via tailscale serve.
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale
+    volumes:
+      - 9router-data:/app/data
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20128"
+      HOSTNAME: 0.0.0.0
+      NODE_ENV: production
+      # serve runs in HTTP mode (no TLS termination), so the browser sees
+      # plain http and would not send a cookie marked Secure.
+      AUTH_COOKIE_SECURE: "false"
+      JWT_SECRET: ${JWT_SECRET}
+      INITIAL_PASSWORD: ${INITIAL_PASSWORD}
+      # Internal self-call for the cloud sync job; stays inside the netns.
+      BASE_URL: http://127.0.0.1:20128
+      HEADROOM_URL: http://headroom:8787
+      ENABLE_REQUEST_LOGS: "false"
+
+  # Deliberately NOT in the tailscale netns. Same rationale as Tailscale
+  # mode: sharing it would let this third-party image reach 9router over
+  # 127.0.0.1 with no X-Forwarded-For, unlocking local privileges.
+  headroom:
+    image: ghcr.io/chopratejas/headroom:latest
+    restart: unless-stopped
+    expose:
+      - "8787"
+
+networks:
+  dokploy-network:
+    external: true
+
+volumes:
+  9router-data:
+  tailscale-state:
+  headscale-data:

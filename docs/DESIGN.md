@@ -62,6 +62,7 @@ volume, provided it is not exposed publicly.
 | Tailscale installed on the host | Rejected. Adds a root daemon and rewrites `/etc/resolv.conf` on a production server. |
 | **Tailscale as a sidecar container** | **Chosen as the default.** |
 | **SSH local port forward** | **Chosen as the fallback**, for networks where Tailscale is filtered. |
+| **Headscale (self-hosted control plane)** | **Chosen as the second fallback**, for networks where Tailscale is filtered and a mesh is preferred over per-machine tunnels. |
 
 The deciding argument: in every publicly-exposed option, `/v1` must stay
 reachable by clients that authenticate with a bearer token alone, so no
@@ -85,8 +86,20 @@ SSH mode, two containers:
 client ──SSH──> [vps 127.0.0.1:20128] ──bridge──> [9router] ──> [headroom :8787]
 ```
 
-Neither publishes a port reachable from the internet, creates a Traefik route,
-joins `dokploy-network`, or needs a public DNS record.
+Headscale mode, four containers:
+
+```
+mesh ──HTTP 80──> [tailscale sidecar] ──127.0.0.1:20128──> [9router]
+                       │  (shared netns)                     │
+                       └── docker bridge ────────────> [headroom :8787]
+
+headscale.yourdomain.com ──HTTPS 443──> [headscale]  (control plane + DERP, public)
+```
+
+None of the three publishes a 9Router port reachable from the internet, creates
+a Traefik route for 9Router, or needs a public DNS record for 9Router. Headscale
+mode adds one public service — the Headscale control plane — but 9Router itself
+stays private.
 
 ### Namespace sharing
 
@@ -107,11 +120,11 @@ node was configured. The sidecar makes all of that moot.
 elevated access. This is safe only because `serve` sets forwarding headers.
 Verified in `tailscale/tailscale`, `ipn/ipnlocal/serve.go`:
 `addProxyForwardedHeaders` is called unconditionally from the proxy's `Rewrite`
-hook and sets `X-Forwarded-For` to the client's tailnet address along with
-`X-Forwarded-Proto: https`.
+hook and sets `X-Forwarded-For` to the client's mesh address along with
+`X-Forwarded-Proto` (https for Tailscale mode, http for Headscale mode).
 
 ```
-client 100.x → serve (TLS :443) → XFF=100.x, XFP=https
+client 100.x → serve (TLS :443 or HTTP :80) → XFF=100.x, XFP=…
   → 127.0.0.1:20128 → custom-server.js: loopback peer + XFF present
   → stamps x-9r-real-ip=100.x, x-9r-via-proxy=1
   → dashboardGuard.isLocalRequest() = false
@@ -119,8 +132,9 @@ client 100.x → serve (TLS :443) → XFF=100.x, XFP=https
 
 `/v1` still requires an API key and the local-only routes still return 403.
 Two incidental benefits over a Traefik fronting: the rate limiter gets real
-per-client buckets, and `X-Forwarded-Proto: https` makes `AUTH_COOKIE_SECURE`
-behave correctly.
+per-client buckets, and `X-Forwarded-Proto: https` (Tailscale mode) makes
+`AUTH_COOKIE_SECURE` behave correctly. In Headscale mode, `X-Forwarded-Proto`
+is `http`, so `AUTH_COOKIE_SECURE` is `false` — matching SSH mode.
 
 **If upstream changes either `custom-server.js`'s header handling or
 `dashboardGuard.isLocalRequest`, re-run `verify.sh` before trusting the
@@ -163,13 +177,35 @@ not IP blocking. Tailscale specifically is unreachable, because the control
 plane and every DERP relay share that domain. WireGuard as a protocol is not
 being touched.
 
-Headscale was considered, since a self-hosted control plane on an unrelated
-domain would not match the filter. Rejected: it does not support
-`tailscale serve` with HTTPS or per-node `tailscale cert`
+Headscale was originally rejected, since a self-hosted control plane on an
+unrelated domain would not match the SNI filter. The original objections were:
+it does not support `tailscale serve` with HTTPS or per-node `tailscale cert`
 (juanfont/headscale#1921, tagged `tailscale-feature-gap`), the default DERP map
 still points at `*.tailscale.com` so a self-hosted DERP is needed too, and the
 result is a new public-facing control plane on the same production box the
-design was trying to keep clean. Three moving parts to replace one tunnel.
+design was trying to keep clean.
+
+Headscale was later **un-rejected** and added as a third access mode, for users
+who need a mesh (not per-machine tunnels) and whose network filters Tailscale.
+The objections were addressed as follows:
+
+- **No HTTPS serve**: `tailscale serve` runs in HTTP mode on port 80. WireGuard
+  encrypts the mesh transport, so traffic is encrypted in transit. Clients that
+  require `https://` need a local TLS terminator. `AUTH_COOKIE_SECURE` is
+  `false`, matching SSH mode.
+- **Self-hosted DERP**: the embedded DERP relay in Headscale is used, with
+  `urls: []` to avoid Tailscale's public DERP servers (which live on
+  `*.tailscale.com` and are filtered). STUN is configured but its UDP port is
+  not published, so clients relay through DERP over HTTPS/443 — pure HTTPS,
+  no UDP, maximum censorship resistance.
+- **New public-facing control plane**: accepted as the trade-off. Headscale is
+  the one public service in the stack. 9Router itself stays private. The
+  control plane does not hold 9Router secrets, but a compromise lets an
+  attacker enroll rogue nodes, so it should be hardened (SSH key-only, Fail2Ban,
+  restricted API access).
+
+Three moving parts to replace one tunnel — but for users who need a mesh and
+cannot reach Tailscale's hosted control plane, it is the right trade.
 
 SSH was already reachable on both 22 and 443, needs no new infrastructure, and
 adds no new listening service.
@@ -209,7 +245,8 @@ redeploy.
 | Volume | Contents | Rationale |
 | --- | --- | --- |
 | `9router-data` → `/app/data` | `db/data.sqlite`, provider OAuth tokens, API keys, `jwt-secret`, certificates, backups | the entire configuration |
-| `tailscale-state` → `/var/lib/tailscale` | node identity, serve config, TLS certificate | Tailscale mode only: same hostname and certificate after restart, no re-authentication |
+| `tailscale-state` → `/var/lib/tailscale` | node identity, serve config, TLS certificate | Tailscale/Headscale modes: same hostname and certificate (Tailscale) or node identity (Headscale) after restart, no re-authentication |
+| `headscale-data` → `/var/lib/headscale` | control plane database, noise private key, DERP private key | Headscale mode only: control plane survives restarts without re-initialization |
 
 The auth key is consumed on first run only. `--advertise-tags=tag:nine-router`
 disables key expiry for the node, so a stack left stopped for months still
@@ -239,8 +276,9 @@ becomes unacceptable: pin a version tag and delete the scheduled job.
 307. A 200 on the first means the central assumption has broken.
 
 On the host, `ss -tlnp | grep -E '20128|8787'` must return nothing in Tailscale
-mode, and exactly `127.0.0.1:20128` in SSH mode. `0.0.0.0:20128` means the
-loopback prefix was lost from the `ports:` entry and the service is public.
+and Headscale modes, and exactly `127.0.0.1:20128` in SSH mode.
+`0.0.0.0:20128` means the loopback prefix was lost from the `ports:` entry and
+the service is public.
 
 ## To confirm against your installed versions
 

@@ -15,6 +15,10 @@ secrets.*
 tailscale-state/
 var/lib/tailscale/
 
+# Headscale runtime state (control plane database, keys)
+headscale-data/
+var/lib/headscale/
+
 # 9Router runtime data (SQLite database, provider OAuth tokens, backups)
 data/
 *.sqlite
