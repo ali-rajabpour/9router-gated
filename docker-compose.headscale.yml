@@ -139,32 +139,24 @@ services:
       - dokploy-network
     command:
       - |
-        echo "=== Waiting for Headscale HTTP ==="
         for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
           wget -q -O- http://headscale:8080/health 2>/dev/null && break
-          echo "Waiting... (attempt $$i/30)"
+          echo "Waiting for Headscale to be ready... (attempt $$i/30)"
           sleep 2
         done
-        echo "=== Headscale is ready ==="
         if [ -f /shared/preauthkey ] && [ -n "$$(cat /shared/preauthkey 2>/dev/null)" ]; then
           echo "Pre-auth key already exists, skipping setup"
           exit 0
         fi
-        echo "=== Creating user ==="
+        echo "Creating Headscale user: ${HEADSCALE_USER:-9router}"
         headscale --config /shared/config.yaml users create ${HEADSCALE_USER:-9router} 2>&1 || echo "User may already exist"
-        echo "=== Listing users to find ID ==="
-        USERS=$$(headscale --config /shared/config.yaml users list --output json 2>&1)
-        echo "Users: $$USERS"
-        USER_ID=$$(echo "$$USERS" | sed 's/ //g' | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+        USER_ID=$$(headscale --config /shared/config.yaml users list --output json 2>&1 | sed 's/ //g' | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
         if [ -z "$$USER_ID" ]; then
-          echo "ERROR: Could not find user ID"
+          echo "ERROR: Could not find user ID after creating user"
           exit 1
         fi
-        echo "Found user ID: $$USER_ID"
-        echo "=== Creating pre-auth key ==="
-        RAW=$$(headscale --config /shared/config.yaml preauthkeys create --user $$USER_ID --reusable --expiration 87600h 2>&1)
-        echo "Raw output: $$RAW"
-        KEY=$$(echo "$$RAW" | grep -oE '(tskey|hskey)-auth-[a-zA-Z0-9_-]*')
+        echo "Found user ID: $$USER_ID, creating reusable pre-auth key..."
+        KEY=$$(headscale --config /shared/config.yaml preauthkeys create --user $$USER_ID --reusable --expiration 87600h 2>&1 | grep -oE '(tskey|hskey)-auth-[a-zA-Z0-9_-]*')
         if [ -n "$$KEY" ]; then
           echo "$$KEY" > /shared/preauthkey
           echo "========================================"
@@ -172,7 +164,8 @@ services:
           echo "The Tailscale sidecar will use it automatically."
           echo "========================================"
         else
-          echo "ERROR: Failed to extract pre-auth key from output"
+          echo "ERROR: Failed to create pre-auth key"
+          exit 1
         fi
     volumes:
       - headscale-data:/var/lib/headscale

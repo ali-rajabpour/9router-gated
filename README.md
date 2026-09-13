@@ -565,45 +565,15 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
    > the key to a shared volume that the Tailscale sidecar reads, and prints
    > the key to its container logs for your visibility.
 
-### Step 4: Add file mounts
-
-1. In the Dokploy project, go to **Advanced** and find **Volumes**.
-2. Add two file mounts. For each, set **File Path** to a bare filename (no
-   leading slash, no directory) and paste the file's contents as **Content**:
-
-   **Mount 1:**
-
-   | Field | Value |
-   |---|---|
-   | **File Path** | `serve-headscale.json` |
-   | **Content** | Paste the contents of `serve-headscale.json` from this repository |
-
-   **Mount 2:**
-
-   | Field | Value |
-   |---|---|
-   | **File Path** | `headscale-config.yaml.template` |
-   | **Content** | Paste the contents of `headscale-config.yaml.template` from this repository |
-
-   > Dokploy writes file mounts to `<project>/files/`, which is why the
-   > compose file mounts them as `../files/serve-headscale.json` and
-   > `../files/headscale-config.yaml.template`. Do not mount the repository
-   > files directly - Dokploy re-clones the repository on every deploy, so a
-   > direct mount works once and then breaks. File Mounts live outside the
-   > cloned directory and survive.
-   >
-   > Do not edit the template. `HEADSCALE_DOMAIN` is substituted at container
-   > startup from the environment variable you set in Step 3.
-
-### Step 5: Deploy
+### Step 4: Deploy
 
 1. Click **Deploy** in the Dokploy panel.
 2. Watch the container logs in the Dokploy panel. On first start you will
-   see, in the Headscale container logs:
+   see, in the Headscale setup container logs:
 
    ```
    ========================================
-   Headscale pre-auth key created: tskey-auth-xxxxxxxxx
+   Headscale pre-auth key created: hskey-auth-xxxxxxxxx
    The Tailscale sidecar will use it automatically.
    ========================================
    ```
@@ -614,7 +584,7 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
 3. Wait for all containers to show as running. The sidecar may take 10-30
    seconds to come up after Headscale issues the key.
 
-### Step 6: Find the sidecar's mesh IP
+### Step 5: Find the sidecar's mesh IP
 
 The mesh IP is the base URL for all your clients. You have two ways to find
 it, neither requires SSH:
@@ -637,7 +607,7 @@ Look for the `9router` node and note its IP (e.g. `100.64.0.2`).
 
 Your base URL is `http://<mesh-ip>:80` (e.g. `http://100.64.0.2:80`).
 
-### Step 7: Enroll client machines
+### Step 6: Enroll client machines
 
 On each client machine that will use 9Router:
 
@@ -819,8 +789,6 @@ URL.
 | `docker-compose.ssh.yml` | SSH mode: 9Router bound to host loopback, Headroom |
 | `docker-compose.headscale.yml` | Headscale mode: Headscale + sidecar, 9Router, Headroom |
 | `serve.json` | `tailscale serve` config (Tailscale mode), mounted via Dokploy |
-| `serve-headscale.json` | `tailscale serve` config (Headscale mode, HTTP), mounted via Dokploy |
-| `headscale-config.yaml.template` | Headscale server config template, substituted at startup from `HEADSCALE_DOMAIN` |
 | `.env.example` | The required secrets |
 | `verify.sh` | Post-deploy assertions that privileges did not leak |
 | `DEPLOY.md` | Full runbook for all three modes |

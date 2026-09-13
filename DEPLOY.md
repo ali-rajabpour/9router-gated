@@ -11,7 +11,7 @@ but 9Router itself stays private.)
 | Compose file | `docker-compose.yml` | `docker-compose.ssh.yml` | `docker-compose.headscale.yml` |
 | Client URL | `https://9router.<tailnet>.ts.net` | `http://127.0.0.1:20128` | `http://100.64.0.2:80` |
 | Transport | WireGuard + TLS from `tailscale serve` | SSH | WireGuard + HTTP from `tailscale serve` |
-| Server-side setup | Tailscale sidecar, ACLs, file mount | Nothing beyond the compose file | Headscale container, sidecar, two file mounts |
+| Server-side setup | Tailscale sidecar, ACLs, file mount | Nothing beyond the compose file | Headscale container, sidecar, DNS record |
 | Client-side setup | Install Tailscale, log in | Persistent `ssh -L`, one per machine | Install Tailscale, point at Headscale, log in |
 | Real TLS certificate | Yes | No, transport is SSH | No, HTTP over WireGuard |
 | Extra layer of auth | Tailnet membership | VPS SSH credentials | Mesh membership |
@@ -363,30 +363,7 @@ headscale.yourdomain.com  A  <vps-ip>
 
 Traefik (managed by Dokploy) terminates TLS on this hostname.
 
-## C2. File mounts
-
-**Advanced → Volumes → Add File Mount**. Two mounts, both required:
-
-| Field | Value |
-| --- | --- |
-| **File Path** | `serve-headscale.json` |
-| **Content** | the contents of `serve-headscale.json` from this repository |
-
-| Field | Value |
-| --- | --- |
-| **File Path** | `headscale-config.yaml.template` |
-| **Content** | the contents of `headscale-config.yaml.template` from this repository |
-
-Same bare-filename convention as `serve.json` in Tailscale mode. Dokploy writes
-them to `<project>/files/`, which is why the compose file mounts them as
-`../files/serve-headscale.json` and
-`../files/headscale-config.yaml.template`.
-
-**Do not edit the template.** `HEADSCALE_DOMAIN` is substituted at container
-startup from the environment variable. Set `HEADSCALE_DOMAIN` in Dokploy's
-Environment tab and the compose file handles the rest.
-
-## C3. Deploy (fully automated)
+## C2. Deploy (fully automated)
 
 Set **Compose Path** to `./docker-compose.headscale.yml`, set `JWT_SECRET`,
 `INITIAL_PASSWORD`, and `HEADSCALE_DOMAIN` in the Environment tab. Leave
@@ -403,11 +380,11 @@ automatically:
 The Tailscale sidecar waits for the key file, then joins the mesh automatically.
 No SSH to the VPS, no manual key generation, no second deploy.
 
-Watch the Headscale container logs in the Dokploy panel for:
+Watch the Headscale setup container logs in the Dokploy panel for:
 
 ```
 ========================================
-Headscale pre-auth key created: tskey-auth-xxxxxxxxx
+Headscale pre-auth key created: hskey-auth-xxxxxxxxx
 The Tailscale sidecar will use it automatically.
 ========================================
 ```
@@ -419,7 +396,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://headscale.yourdomain.com/healt
 # expect 200
 ```
 
-## C4. Find the sidecar's mesh IP
+## C3. Find the sidecar's mesh IP
 
 The mesh IP is your base URL. Two ways to find it, neither requires SSH:
 
@@ -429,7 +406,7 @@ The mesh IP is your base URL. Two ways to find it, neither requires SSH:
 **From a client machine (after C5):** run `tailscale status` and look for the
 `9router` node.
 
-## C5. Enroll client machines
+## C4. Enroll client machines
 
 On each client, install the Tailscale client and join your Headscale:
 
@@ -444,7 +421,7 @@ docker exec <name> headscale nodes list
 docker exec <name> headscale nodes approve --node <id>
 ```
 
-## C6. The HTTPS gap
+## C5. The HTTPS gap
 
 Headscale does not support per-node TLS certificate provisioning
 (`tailscale cert` / HTTPS serve). So `tailscale serve` runs in **HTTP mode**
@@ -458,7 +435,7 @@ mesh.
 If you need HTTPS on the client side, run a local reverse proxy (Caddy, nginx)
 on the client machine that terminates TLS and forwards to the mesh IP.
 
-## C8. DERP and censorship resistance
+## C6. DERP and censorship resistance
 
 The embedded DERP relay relays traffic between mesh nodes over HTTPS when
 direct WireGuard UDP cannot connect. Since Headscale and 9Router are on the
