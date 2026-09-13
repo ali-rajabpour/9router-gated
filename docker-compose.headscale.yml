@@ -200,7 +200,7 @@ services:
       - -c
       - |
         mkdir -p /config
-        printf '%s\n' '{"TCP":{"80":{"HTTP":true}},"Web":{"*:80":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:20128"}}}}}' > /config/serve-headscale.json
+        printf '%s\n' '{"TCP":{"80":{"TCPForward":"127.0.0.1:20128"}}}' > /config/serve-headscale.json
         cat /config/serve-headscale.json
         if [ -z "$${TS_AUTHKEY:-}" ]; then
           echo "Waiting for pre-auth key from Headscale..."
