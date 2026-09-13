@@ -297,7 +297,7 @@ hand.
 ## Verification
 
 `verify.sh` takes the base URL of whichever mode is deployed and asserts:
-`/v1/models` → 401, `/api/mcp/` → 403, `/api/settings` → 401, `/dashboard` →
+`/v1/models` → 401, `/api/mcp/probe` → 403, `/api/settings` → 401, `/dashboard` →
 307. A 200 on the first means the central assumption has broken.
 
 On the host, `ss -tlnp | grep -E '20128|8787'` must return nothing in Tailscale

@@ -661,7 +661,7 @@ From a client machine, against your mode's base URL:
 ./verify.sh http://100.64.0.1                       # Headscale, router mesh IP
 ```
 
-Expected: `/v1/models` returns 401, `/api/mcp/` returns 403, `/api/settings`
+Expected: `/v1/models` returns 401, `/api/mcp/probe` returns 403, `/api/settings`
 returns 401, `/dashboard` returns 307. A bare hostname is accepted and assumed
 to be HTTPS. `./verify.sh --self-test` checks the script itself without
 contacting a server.

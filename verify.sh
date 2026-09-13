@@ -62,8 +62,10 @@ echo "checking $BASE"
 # who can reach it.
 check "/v1/models without API key" 401 "$(code "$BASE/v1/models")"
 
-# Local-only route: spawns child processes / reads host secrets.
-check "/api/mcp/ blocked" 403 "$(code "$BASE/api/mcp/")"
+# Local-only route: spawns child processes / reads host secrets. A bare
+# /api/mcp/ is answered by a trailing-slash redirect before the guard runs,
+# so probe a path underneath it.
+check "/api/mcp/probe blocked" 403 "$(code "$BASE/api/mcp/probe")"
 
 # Deny-by-default on /api/*.
 check "/api/settings unauthenticated" 401 "$(code "$BASE/api/settings")"
