@@ -89,11 +89,7 @@ client ──SSH──> [vps 127.0.0.1:20128] ──bridge──> [9router] ─�
 Headscale mode, four containers:
 
 ```
-mesh ──HTTP 80──> [tailscale sidecar] ──127.0.0.1:20128──> [9router]
-                       │  (shared netns)                     │
-                       └── docker bridge ────────────> [headroom :8787]
-
-headscale.yourdomain.com ──HTTPS 443──> [headscale]  (control plane + DERP, public)
+device ──HTTPS 443 (DERP)──> [headscale] ──> [sidecar :80] ──bridge──> [9router :20128] ──> [headroom :8787]
 ```
 
 None of the three publishes a 9Router port reachable from the internet, creates
@@ -103,7 +99,8 @@ stays private.
 
 ### Namespace sharing
 
-9Router runs with `network_mode: "service:tailscale"`. The `tailscale0`
+In Tailscale mode 9Router runs with `network_mode: "service:tailscale"`.
+Headscale mode does not share a namespace; see the loopback section below. The `tailscale0`
 interface exists only inside that namespace, leaving the host's routing table,
 resolver configuration, firewall, and Docker's iptables chains untouched.
 Deleting the stack leaves nothing behind.
@@ -116,15 +113,16 @@ node was configured. The sidecar makes all of that moot.
 
 ### The loopback privilege question
 
-`tailscale serve` proxies over loopback, and 9Router grants local requests
-elevated access. This is safe only because `serve` sets forwarding headers.
+In Tailscale mode `tailscale serve` proxies over loopback, and 9Router grants
+local requests elevated access. This is safe only because `serve` sets
+forwarding headers.
 Verified in `tailscale/tailscale`, `ipn/ipnlocal/serve.go`:
 `addProxyForwardedHeaders` is called unconditionally from the proxy's `Rewrite`
 hook and sets `X-Forwarded-For` to the client's mesh address along with
-`X-Forwarded-Proto` (https for Tailscale mode, http for Headscale mode).
+`X-Forwarded-Proto: https`.
 
 ```
-client 100.x → serve (TLS :443 or HTTP :80) → XFF=100.x, XFP=…
+client 100.x → serve (TLS :443) → XFF=100.x, XFP=https
   → 127.0.0.1:20128 → custom-server.js: loopback peer + XFF present
   → stamps x-9r-real-ip=100.x, x-9r-via-proxy=1
   → dashboardGuard.isLocalRequest() = false
@@ -133,8 +131,27 @@ client 100.x → serve (TLS :443 or HTTP :80) → XFF=100.x, XFP=…
 `/v1` still requires an API key and the local-only routes still return 403.
 Two incidental benefits over a Traefik fronting: the rate limiter gets real
 per-client buckets, and `X-Forwarded-Proto: https` (Tailscale mode) makes
-`AUTH_COOKIE_SECURE` behave correctly. In Headscale mode, `X-Forwarded-Proto`
-is `http`, so `AUTH_COOKIE_SECURE` is `false` - matching SSH mode.
+`AUTH_COOKIE_SECURE` behave correctly.
+
+Headscale mode cannot use the HTTP proxy handler: for plain HTTP, `serve`
+looks the handler up by `<Host header>.<MagicDNS suffix>:<port>`
+(`getServeHandler`), which never matches a client connecting by IP. It uses a
+raw `TCPForward` instead, and a raw forward adds no header. 9Router's
+`custom-server.js` marks a request as proxied only when `X-Forwarded-For` or
+`X-Real-IP` is present, so a forward to `127.0.0.1` makes every mesh peer
+local. The first Headscale version of this repository did exactly that.
+
+The fix is to take 9Router out of the sidecar's namespace. The sidecar
+forwards to `9router:20128` over the stack's private bridge, so 9Router sees
+the sidecar's bridge address, a remote peer: `/v1` needs a key and the
+local-only routes return 403. The cost is that 9Router's login limiter sees one
+address for every client, which is irrelevant for a single operator.
+
+This also removes a second trap. A container using `network_mode: service:X`
+stays in the namespace it joined, so a sidecar restart used to strand 9Router
+in a dead namespace, visible as 502 through the forward. Separate containers
+have no such coupling; the forward resolves the service name on each
+connection.
 
 **If upstream changes either `custom-server.js`'s header handling or
 `dashboardGuard.isLocalRequest`, re-run `verify.sh` before trusting the
@@ -189,20 +206,24 @@ Headscale was later **un-rejected** and added as a third access mode, for users
 who need a mesh (not per-machine tunnels) and whose network filters Tailscale.
 The objections were addressed as follows:
 
-- **No HTTPS serve**: `tailscale serve` runs in HTTP mode on port 80. WireGuard
-  encrypts the mesh transport, so traffic is encrypted in transit. Clients that
+- **No HTTPS serve**: 9Router is HTTP inside WireGuard on port 80. Clients that
   require `https://` need a local TLS terminator. `AUTH_COOKIE_SECURE` is
   `false`, matching SSH mode.
-- **Self-hosted DERP**: the embedded DERP relay in Headscale is used, with
-  `urls: []` to avoid Tailscale's public DERP servers (which live on
-  `*.tailscale.com` and are filtered). STUN is configured but its UDP port is
-  not published, so clients relay through DERP over HTTPS/443 - pure HTTPS,
-  no UDP, maximum censorship resistance.
-- **New public-facing control plane**: accepted as the trade-off. Headscale is
-  the one public service in the stack. 9Router itself stays private. The
-  control plane does not hold 9Router secrets, but a compromise lets an
-  attacker enroll rogue nodes, so it should be hardened (SSH key-only, Fail2Ban,
-  restricted API access).
+- **Self-hosted DERP**: the embedded relay is used with `urls: []`, so
+  Tailscale's public relays on `*.tailscale.com` are never contacted. STUN is
+  configured but UDP 3478 is not published, so every client relays over
+  HTTPS/443. Measured through Cloudflare's proxy from a test node on the same
+  host: control and DERP both pass, `UDP: false`, 13 to 18 ms to the router.
+- **New public-facing control plane**: accepted. Its gRPC API listens on
+  loopback only. Enrollment needs a single-use key that expires in an hour,
+  the router's key is never printed, and the access policy confines devices to
+  `tcp/80` on the router, so an enrolled rogue device gains the same thing a
+  legitimate one has: an address that still demands 9Router's API key.
+- **Stale devices**: Tailscale clients keep their last network map, and drop an
+  empty peer list as "no change". With devices isolated from each other their
+  only peer is the router, so removing a device never leaves ghosts behind on
+  the others. A replaced control plane still needs `tailscale logout` on every
+  old client.
 
 Three moving parts to replace one tunnel - but for users who need a mesh and
 cannot reach Tailscale's hosted control plane, it is the right trade.
@@ -245,8 +266,10 @@ redeploy.
 | Volume | Contents | Rationale |
 | --- | --- | --- |
 | `9router-data` → `/app/data` | `db/data.sqlite`, provider OAuth tokens, API keys, `jwt-secret`, certificates, backups | the entire configuration |
-| `tailscale-state` → `/var/lib/tailscale` | node identity, serve config, TLS certificate | Tailscale/Headscale modes: same hostname and certificate (Tailscale) or node identity (Headscale) after restart, no re-authentication |
-| `headscale-data` → `/var/lib/headscale` | control plane database, noise private key, DERP private key | Headscale mode only: control plane survives restarts without re-initialization |
+| `tailscale-state` → `/var/lib/tailscale` | node identity, serve config, TLS certificate | Tailscale mode: same hostname and certificate after restart |
+| `sidecar-state` → `/var/lib/tailscale` | router node identity | Headscale mode: no re-registration after restart |
+| `headscale-data` → `/var/lib/headscale` | control plane database, noise and DERP private keys | Headscale mode: control plane survives restarts |
+| `router-key` → `/router` | the router's one-time key | Headscale mode: present only until the router registers |
 
 The auth key is consumed on first run only. `--advertise-tags=tag:nine-router`
 disables key expiry for the node, so a stack left stopped for months still
@@ -267,7 +290,9 @@ incidental.
 
 Accepted risk: tracking `:latest` with an unattended redeploy means an upstream
 compromise reaches the provider OAuth tokens without review. Mitigation if that
-becomes unacceptable: pin a version tag and delete the scheduled job.
+becomes unacceptable: pin a version tag and delete the scheduled job. The
+Headscale compose file already does this; its images are pinned and updated by
+hand.
 
 ## Verification
 

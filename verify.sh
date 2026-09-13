@@ -10,7 +10,7 @@
 # Usage:
 #   ./verify.sh https://9router.<your-tailnet>.ts.net   # Tailscale mode
 #   ./verify.sh http://127.0.0.1:20128                  # SSH mode, tunnel up
-#   ./verify.sh http://100.64.0.2:80                    # Headscale mode, mesh IP
+#   ./verify.sh http://100.64.0.1                       # Headscale mode, router mesh IP
 
 set -uo pipefail
 

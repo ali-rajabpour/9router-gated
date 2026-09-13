@@ -162,7 +162,6 @@ services:
   sidecar:
     image: ${TAILSCALE_IMAGE:-tailscale/tailscale:v1.102.3}
     restart: unless-stopped
-    hostname: 9router
     depends_on:
       headscale:
         condition: service_healthy
@@ -179,6 +178,10 @@ services:
         if [ -s /router/key ]; then export TS_AUTHKEY="$$(cat /router/key)"; fi
         exec /usr/local/bin/containerboot
     environment:
+      # Mesh name only. A container hostname of 9router would add
+      # "9router -> this container" to /etc/hosts, and the forward below would
+      # dial the sidecar itself instead of the 9router service.
+      TS_HOSTNAME: 9router
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
       TS_USERSPACE: "true"
