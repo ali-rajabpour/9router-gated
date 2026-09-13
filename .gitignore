@@ -47,3 +47,7 @@ desktop.ini
 logs/
 result.json
 tmp/
+
+# Local panel credentials
+Dokploy-API.md
+.claude/handoffs/
