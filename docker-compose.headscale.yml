@@ -58,13 +58,8 @@ services:
           update_frequency: 3h
         disable_check_updates: false
         dns:
-          magic_dns: true
-          base_domain: tailnet.local
-          override_local_dns: true
-          nameservers:
-            global:
-              - 1.1.1.1
-              - 1.0.0.1
+          magic_dns: false
+          override_local_dns: false
         node:
           expiry: 0
           ephemeral:
@@ -214,7 +209,7 @@ services:
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve-headscale.json
       TS_USERSPACE: "true"
-      TS_EXTRA_ARGS: --login-server=https://${HEADSCALE_DOMAIN} --reset
+      TS_EXTRA_ARGS: --login-server=https://${HEADSCALE_DOMAIN} --reset --accept-dns=false
     volumes:
       - sidecar-state:/var/lib/tailscale
       - shared:/shared:ro

@@ -391,7 +391,7 @@ Watch the `headscale-setup` container logs in the Dokploy panel for:
 ========================================
 Headscale pre-auth key: hskey-auth-xxxxxxxxx
 Use this to join client machines to the mesh:
-  tailscale up --login-server=https://headscale.yourdomain.com --auth-key=hskey-auth-xxxxxxxxx
+  tailscale up --login-server=https://headscale.yourdomain.com --auth-key=hskey-auth-xxxxxxxxx --accept-dns=false
 ========================================
 ```
 
@@ -420,7 +420,7 @@ The mesh IP is your base URL. Two ways to find it, neither requires SSH:
 On each client, install the Tailscale client and join your Headscale:
 
 ```bash
-tailscale up --login-server https://headscale.yourdomain.com
+tailscale up --login-server https://headscale.yourdomain.com --accept-dns=false
 ```
 
 Approve the node in Headscale if you enabled node approval:

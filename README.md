@@ -627,8 +627,12 @@ On each client machine that will use 9Router:
 2. Join your Headscale (not Tailscale's hosted control plane):
 
    ```bash
-   tailscale up --login-server https://headscale.yourdomain.com
+   tailscale up --login-server https://headscale.yourdomain.com --accept-dns=false
    ```
+
+   `--accept-dns=false` keeps your system DNS untouched. Tailscale only
+   routes `100.64.0.0/10` (the mesh range) through the tunnel. All other
+   traffic goes direct. No DNS conflicts, no routing ambiguity.
 
    This opens a browser for first-time authentication. After that, the
    machine is on your mesh permanently.
