@@ -6,22 +6,27 @@
 # your VPS (the control plane + DERP relay). 9router itself stays private.
 # Use this only when Tailscale's hosted control plane is unreachable.
 #
-# Requires two Dokploy File Mounts (same pattern as serve.json in Tailscale
-# mode): see DEPLOY.md §C2.
+# Requires two Dokploy File Mounts: see DEPLOY.md §C2.
+# All configuration is via environment variables - no file editing needed.
 services:
   # Headscale control plane + embedded DERP relay. Public on your domain
   # via Traefik. This is the only public-facing service in the stack.
+  # The config template is substituted at startup from HEADSCALE_DOMAIN.
   headscale:
-    image: headscale/headscale:0.29.3
+    image: ${HEADSCALE_IMAGE:-headscale/headscale:0.29.3}
     restart: unless-stopped
-    command: serve
+    # Copy the read-only template, substitute HEADSCALE_DOMAIN, then start.
+    # Uses compose-level ${HEADSCALE_DOMAIN} substitution (not shell $$).
+    command: >
+      sh -c "sed 's|HEADSCALE_DOMAIN|${HEADSCALE_DOMAIN}|g' /etc/headscale/config-template.yaml > /tmp/config.yaml &&
+      exec headscale serve --config /tmp/config.yaml"
     expose:
       - "8080"
     networks:
       - dokploy-network
     volumes:
       - headscale-data:/var/lib/headscale
-      - ../files/headscale-config.yaml:/etc/headscale/config.yaml:ro
+      - ../files/headscale-config.yaml.template:/etc/headscale/config-template.yaml:ro
     healthcheck:
       test: ["CMD", "headscale", "health"]
       interval: 30s
@@ -39,7 +44,7 @@ services:
       - traefik.http.routers.headscale.tls.certresolver=letsencrypt
       - traefik.http.routers.headscale.service=headscale-svc
       - traefik.http.services.headscale-svc.loadbalancer.server.port=8080
-      # HTTP → HTTPS redirect
+      # HTTP -> HTTPS redirect
       - traefik.http.routers.headscale-http.rule=Host(`${HEADSCALE_DOMAIN}`)
       - traefik.http.routers.headscale-http.entrypoints=web
       - traefik.http.routers.headscale-http.middlewares=headscale-https-redirect
@@ -51,9 +56,9 @@ services:
   # per-node cert provisioning). WireGuard encrypts the transport; the
   # HTTP layer is just a proxy.
   tailscale:
-    image: tailscale/tailscale:latest
+    image: ${TAILSCALE_IMAGE:-tailscale/tailscale:latest}
     restart: unless-stopped
-    hostname: 9router
+    hostname: ${TAILSCALE_HOSTNAME:-9router}
     environment:
       # Headscale pre-auth key (generated via `headscale preauthkeys create`),
       # not a Tailscale key. Same env var - the client sends it to whatever
@@ -64,13 +69,13 @@ services:
       TS_USERSPACE: "true"
       # --login-server is what makes the client use Headscale instead of
       # Tailscale's hosted control plane.
-      TS_EXTRA_ARGS: --login-server=https://${HEADSCALE_DOMAIN}
+      TS_EXTRA_ARGS: --login-server=https://${HEADSCALE_DOMAIN} --advertise-tags=${TAILSCALE_TAG:-tag:nine-router}
     volumes:
       - tailscale-state:/var/lib/tailscale
       - ../files/serve-headscale.json:/config/serve-headscale.json:ro
 
   9router:
-    image: decolua/9router:latest
+    image: ${NINEROUTER_IMAGE:-decolua/9router:latest}
     pull_policy: always
     restart: unless-stopped
     # Shares the sidecar's netns. Reachable only via tailscale serve.
@@ -98,7 +103,7 @@ services:
   # mode: sharing it would let this third-party image reach 9router over
   # 127.0.0.1 with no X-Forwarded-For, unlocking local privileges.
   headroom:
-    image: ghcr.io/chopratejas/headroom:latest
+    image: ${HEADROOM_IMAGE:-ghcr.io/chopratejas/headroom:latest}
     restart: unless-stopped
     expose:
       - "8787"

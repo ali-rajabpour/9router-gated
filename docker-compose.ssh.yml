@@ -3,7 +3,7 @@ services:
   # The port is bound to the host's loopback interface, so the only way in is
   # an SSH tunnel from a machine that already has shell access to the VPS.
   9router:
-    image: decolua/9router:latest
+    image: ${NINEROUTER_IMAGE:-decolua/9router:latest}
     pull_policy: always
     restart: unless-stopped
     ports:
@@ -28,7 +28,7 @@ services:
       ENABLE_REQUEST_LOGS: "false"
 
   headroom:
-    image: ghcr.io/chopratejas/headroom:latest
+    image: ${HEADROOM_IMAGE:-ghcr.io/chopratejas/headroom:latest}
     restart: unless-stopped
     expose:
       - "8787"

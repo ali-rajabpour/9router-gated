@@ -373,16 +373,17 @@ Traefik (managed by Dokploy) terminates TLS on this hostname.
 
 | Field | Value |
 | --- | --- |
-| **File Path** | `headscale-config.yaml` |
-| **Content** | the contents of `headscale-config.yaml`, **with `HEADSCALE_DOMAIN` on line 5 replaced by your actual domain** |
+| **File Path** | `headscale-config.yaml.template` |
+| **Content** | the contents of `headscale-config.yaml.template` from this repository |
 
 Same bare-filename convention as `serve.json` in Tailscale mode. Dokploy writes
 them to `<project>/files/`, which is why the compose file mounts them as
-`../files/serve-headscale.json` and `../files/headscale-config.yaml`.
+`../files/serve-headscale.json` and
+`../files/headscale-config.yaml.template`.
 
-**You must edit `headscale-config.yaml` before mounting it.** Headscale reads
-the config file literally - no environment variable substitution. Replace
-`HEADSCALE_DOMAIN` on line 5 with e.g. `https://headscale.yourdomain.com`.
+**Do not edit the template.** `HEADSCALE_DOMAIN` is substituted at container
+startup from the environment variable. Set `HEADSCALE_DOMAIN` in Dokploy's
+Environment tab and the compose file handles the rest.
 
 ## C3. First deploy: Headscale only
 

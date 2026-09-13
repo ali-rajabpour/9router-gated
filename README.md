@@ -514,23 +514,7 @@ headscale.yourdomain.com  A  <vps-ip>
 
 Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
 
-### Step 2: Edit the Headscale config
-
-1. Open `headscale-config.yaml` from this repository.
-2. On line 5, replace `HEADSCALE_DOMAIN` with your actual domain:
-
-   ```yaml
-   # Before:
-   server_url: https://HEADSCALE_DOMAIN
-
-   # After:
-   server_url: https://headscale.yourdomain.com
-   ```
-
-   > Headscale reads this file literally. No environment variable
-   > substitution. You must edit the file before mounting it.
-
-### Step 3: Create the Dokploy project
+### Step 2: Create the Dokploy project
 
 1. Open your Dokploy panel in a browser.
 2. Go to **Create** and select **Compose**.
@@ -542,7 +526,7 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
 7. **Do not add a domain to 9Router.** (The Headscale container uses
    `dokploy-network` for Traefik routing, but 9Router itself stays private.)
 
-### Step 4: Set environment variables
+### Step 3: Set environment variables
 
 1. In the Dokploy project, go to the **Environment** tab.
 2. Add these variables:
@@ -552,12 +536,13 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
    | `JWT_SECRET` | The hex string from `openssl rand -hex 32` |
    | `INITIAL_PASSWORD` | The base64 string from `openssl rand -base64 24` |
    | `HEADSCALE_DOMAIN` | `headscale.yourdomain.com` (your actual domain) |
-   | `HS_AUTHKEY` | Leave empty for now. You will generate it in Step 6. |
+   | `HS_AUTHKEY` | Leave empty for now. You will generate it in Step 5. |
 
    > `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when
-   > it is unset.
+   > it is unset. `HEADSCALE_DOMAIN` is substituted into the Headscale config
+   > at container startup - no file editing needed.
 
-### Step 5: Add file mounts
+### Step 4: Add file mounts
 
 1. In the Dokploy project, go to **Advanced** and find **Volumes**.
 2. Add two file mounts:
@@ -573,14 +558,18 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
 
    | Field | Value |
    |---|---|
-   | **File Path** | `headscale-config.yaml` |
-   | **Content** | Paste the **edited** contents of `headscale-config.yaml` (with your domain on line 5) |
+   | **File Path** | `headscale-config.yaml.template` |
+   | **Content** | Paste the contents of `headscale-config.yaml.template` from this repository |
 
    > Same bare-filename convention as Tailscale mode. Dokploy writes them to
    > `<project>/files/`, which is why the compose file mounts them as
-   > `../files/serve-headscale.json` and `../files/headscale-config.yaml`.
+   > `../files/serve-headscale.json` and
+   > `../files/headscale-config.yaml.template`.
+   >
+   > Do not edit the template. `HEADSCALE_DOMAIN` is substituted at container
+   > startup from the environment variable you set in Step 3.
 
-### Step 6: First deploy (Headscale only)
+### Step 5: First deploy (Headscale only)
 
 1. Click **Deploy** in the Dokploy panel.
 2. The Headscale container comes up. The Tailscale sidecar will fail to join
@@ -592,7 +581,7 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
    # expect 200
    ```
 
-### Step 7: Create a Headscale user and pre-auth key
+### Step 6: Create a Headscale user and pre-auth key
 
 SSH into the VPS and run:
 
@@ -610,7 +599,7 @@ docker exec <name> headscale preauthkeys create --user 9router --reusable
 Copy the key. Go back to the Dokploy **Environment** tab and set `HS_AUTHKEY`
 to this value. Click **Deploy** again.
 
-### Step 8: Confirm the sidecar joined
+### Step 7: Confirm the sidecar joined
 
 SSH into the VPS and run:
 
@@ -625,7 +614,7 @@ docker exec <name> tailscale serve status
 
 Note the mesh IP (`100.64.0.x`). That is your base URL.
 
-### Step 9: Enroll client machines
+### Step 8: Enroll client machines
 
 On each client machine that will use 9Router:
 
@@ -787,7 +776,7 @@ URL.
 | `docker-compose.headscale.yml` | Headscale mode: Headscale + sidecar, 9Router, Headroom |
 | `serve.json` | `tailscale serve` config (Tailscale mode), mounted via Dokploy |
 | `serve-headscale.json` | `tailscale serve` config (Headscale mode, HTTP), mounted via Dokploy |
-| `headscale-config.yaml` | Headscale server config, mounted via Dokploy |
+| `headscale-config.yaml.template` | Headscale server config template, substituted at startup from `HEADSCALE_DOMAIN` |
 | `.env.example` | The required secrets |
 | `verify.sh` | Post-deploy assertions that privileges did not leak |
 | `DEPLOY.md` | Full runbook for all three modes |

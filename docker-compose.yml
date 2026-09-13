@@ -1,12 +1,13 @@
 # Tailscale access mode. For networks where Tailscale is filtered, deploy
-# docker-compose.ssh.yml instead; both share the 9router-data volume.
+# docker-compose.ssh.yml or docker-compose.headscale.yml instead; all three
+# share the 9router-data volume.
 services:
   # Tailscale sidecar owns the network namespace. Userspace mode on purpose:
   # no NET_ADMIN, no /dev/net/tun, nothing added to the host's networking.
   tailscale:
-    image: tailscale/tailscale:latest
+    image: ${TAILSCALE_IMAGE:-tailscale/tailscale:latest}
     restart: unless-stopped
-    hostname: 9router
+    hostname: ${TAILSCALE_HOSTNAME:-9router}
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY}
       TS_STATE_DIR: /var/lib/tailscale
@@ -14,13 +15,13 @@ services:
       TS_USERSPACE: "true"
       # Tagged nodes have key expiry disabled, so the stack survives being
       # stopped for months without needing re-authentication.
-      TS_EXTRA_ARGS: --advertise-tags=tag:nine-router
+      TS_EXTRA_ARGS: --advertise-tags=${TAILSCALE_TAG:-tag:nine-router}
     volumes:
       - tailscale-state:/var/lib/tailscale
       - ../files/serve.json:/config/serve.json:ro
 
   9router:
-    image: decolua/9router:latest
+    image: ${NINEROUTER_IMAGE:-decolua/9router:latest}
     pull_policy: always
     restart: unless-stopped
     # Shares the sidecar's netns. Reachable only via tailscale serve.
@@ -49,7 +50,7 @@ services:
   # and the process-spawning routes all unlock. On the bridge it is just
   # another remote client.
   headroom:
-    image: ghcr.io/chopratejas/headroom:latest
+    image: ${HEADROOM_IMAGE:-ghcr.io/chopratejas/headroom:latest}
     restart: unless-stopped
     expose:
       - "8787"
