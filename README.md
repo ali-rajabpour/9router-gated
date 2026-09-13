@@ -267,8 +267,18 @@ membership as a second gate.
 
    > The tag goes in `dst` only. Putting it in `src` as well grants the node
    > access to itself and your own machines nothing. On older tailnets that
-   > use `acls` instead of `grants`, see [DEPLOY.md](DEPLOY.md) for the
-   > equivalent.
+   > use `acls` instead of `grants`, use this equivalent:
+   >
+   > ```jsonc
+   > {
+   >   "tagOwners": { "tag:nine-router": ["autogroup:admin"] },
+   >   "acls": [
+   >     { "action": "accept", "src": ["autogroup:member"], "dst": ["tag:nine-router:443"] },
+   >   ],
+   > }
+   > ```
+   >
+   > Use one style or the other, not both for the same traffic.
 
 ### Step 2: Generate a Tailscale auth key
 
@@ -330,23 +340,30 @@ membership as a second gate.
 2. Wait for the containers to start. Dokploy renders every stderr line as an
    error and `tailscaled` logs everything to stderr, so read the state rather
    than the log color.
-3. SSH into the VPS and confirm the sidecar came up:
-
-   ```bash
-   docker ps --format '{{.Names}}' | grep -i tailscale
-   docker exec <name> tailscale status         # node active, has an address
-   docker exec <name> tailscale serve status   # https://... -> http://127.0.0.1:20128
-   ```
-
+3. Confirm the sidecar came up. In the Dokploy panel, check the Tailscale
+   container logs for a line like:
+   `tailscale up: setting hostname to "9router"; ... 100.x.x.x`
 4. If device approval is on (Step 2), approve the new node under **Machines**
    in the Tailscale admin console.
 
 ### Step 7: Install Tailscale on client machines
 
 1. Install the Tailscale client on each machine that will use 9Router:
-   [download page](https://tailscale.com/download).
+   - **macOS:** `brew install tailscale` or download from
+     [tailscale.com/download](https://tailscale.com/download)
+   - **Windows:** download from
+     [tailscale.com/download](https://tailscale.com/download)
+   - **Linux:** `curl -fsSL https://tailscale.com/install.sh | sh`
+   - **iOS/Android:** App Store / Google Play
 2. Log in with the same Tailscale account.
 3. If device approval is on, approve each machine in the admin console.
+4. Confirm the client can reach 9Router:
+
+   ```bash
+   curl -sS -o /dev/null -w '%{http_code}\n' \
+     https://9router.<your-tailnet>.ts.net/v1/models
+   # expect 401 (unauthorized, but reachable)
+   ```
 
 Your base URL is `https://9router.<your-tailnet>.ts.net`. Proceed to
 [Post-install: verify](#post-install-verify).
@@ -531,21 +548,28 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
 1. In the Dokploy project, go to the **Environment** tab.
 2. Add these variables:
 
-   | Variable | Value |
-   |---|---|
-   | `JWT_SECRET` | The hex string from `openssl rand -hex 32` |
-   | `INITIAL_PASSWORD` | The base64 string from `openssl rand -base64 24` |
-   | `HEADSCALE_DOMAIN` | `headscale.yourdomain.com` (your actual domain) |
-   | `HS_AUTHKEY` | Leave empty for now. You will generate it in Step 5. |
+   | Variable | Value | Required? |
+   |---|---|---|
+   | `JWT_SECRET` | The hex string from `openssl rand -hex 32` | Yes |
+   | `INITIAL_PASSWORD` | The base64 string from `openssl rand -base64 24` | Yes |
+   | `HEADSCALE_DOMAIN` | `headscale.yourdomain.com` (your actual domain) | Yes |
+   | `HEADSCALE_USER` | `9router` (or any name you want) | No (defaults to `9router`) |
+   | `HS_AUTHKEY` | Leave empty - the Headscale container generates one automatically | No |
 
    > `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when
    > it is unset. `HEADSCALE_DOMAIN` is substituted into the Headscale config
    > at container startup - no file editing needed.
+   >
+   > **No SSH to the VPS is required for setup.** The Headscale container
+   > creates the user and pre-auth key automatically on first start, writes
+   > the key to a shared volume that the Tailscale sidecar reads, and prints
+   > the key to its container logs for your visibility.
 
 ### Step 4: Add file mounts
 
 1. In the Dokploy project, go to **Advanced** and find **Volumes**.
-2. Add two file mounts:
+2. Add two file mounts. For each, set **File Path** to a bare filename (no
+   leading slash, no directory) and paste the file's contents as **Content**:
 
    **Mount 1:**
 
@@ -561,88 +585,108 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
    | **File Path** | `headscale-config.yaml.template` |
    | **Content** | Paste the contents of `headscale-config.yaml.template` from this repository |
 
-   > Same bare-filename convention as Tailscale mode. Dokploy writes them to
-   > `<project>/files/`, which is why the compose file mounts them as
-   > `../files/serve-headscale.json` and
-   > `../files/headscale-config.yaml.template`.
+   > Dokploy writes file mounts to `<project>/files/`, which is why the
+   > compose file mounts them as `../files/serve-headscale.json` and
+   > `../files/headscale-config.yaml.template`. Do not mount the repository
+   > files directly - Dokploy re-clones the repository on every deploy, so a
+   > direct mount works once and then breaks. File Mounts live outside the
+   > cloned directory and survive.
    >
    > Do not edit the template. `HEADSCALE_DOMAIN` is substituted at container
    > startup from the environment variable you set in Step 3.
 
-### Step 5: First deploy (Headscale only)
+### Step 5: Deploy
 
 1. Click **Deploy** in the Dokploy panel.
-2. The Headscale container comes up. The Tailscale sidecar will fail to join
-   (no auth key yet) - that is expected.
-3. SSH into the VPS and confirm Headscale is reachable:
+2. Watch the container logs in the Dokploy panel. On first start you will
+   see, in the Headscale container logs:
 
-   ```bash
-   curl -sS -o /dev/null -w '%{http_code}\n' https://headscale.yourdomain.com/health
-   # expect 200
+   ```
+   ========================================
+   Headscale pre-auth key created: tskey-auth-xxxxxxxxx
+   The Tailscale sidecar will use it automatically.
+   ========================================
    ```
 
-### Step 6: Create a Headscale user and pre-auth key
+   The Tailscale sidecar waits for this key, then joins the mesh automatically.
+   No SSH, no manual key generation, no second deploy.
 
-SSH into the VPS and run:
+3. Wait for all containers to show as running. The sidecar may take 10-30
+   seconds to come up after Headscale issues the key.
+
+### Step 6: Find the sidecar's mesh IP
+
+The mesh IP is the base URL for all your clients. You have two ways to find
+it, neither requires SSH:
+
+**Option A - from the Dokploy panel:**
+
+1. In the Dokploy project, find the Tailscale container.
+2. Open its logs. Look for a line like:
+   `tailscale up: setting hostname to "9router"; ... 100.64.0.2`
+
+**Option B - from a client machine (after Step 7):**
+
+Once a client is on the mesh (Step 7), run:
 
 ```bash
-# Find the Headscale container name
-docker ps --format '{{.Names}}' | grep -i headscale
-
-# Create a user
-docker exec <name> headscale users create 9router
-
-# Generate a reusable pre-auth key
-docker exec <name> headscale preauthkeys create --user 9router --reusable
+tailscale status
 ```
 
-Copy the key. Go back to the Dokploy **Environment** tab and set `HS_AUTHKEY`
-to this value. Click **Deploy** again.
+Look for the `9router` node and note its IP (e.g. `100.64.0.2`).
 
-### Step 7: Confirm the sidecar joined
+Your base URL is `http://<mesh-ip>:80` (e.g. `http://100.64.0.2:80`).
 
-SSH into the VPS and run:
-
-```bash
-docker ps --format '{{.Names}}' | grep -i tailscale
-docker exec <name> tailscale status
-# expect: node active, has a 100.64.0.x address
-
-docker exec <name> tailscale serve status
-# expect: http://100.64.0.x:80 -> http://127.0.0.1:20128
-```
-
-Note the mesh IP (`100.64.0.x`). That is your base URL.
-
-### Step 8: Enroll client machines
+### Step 7: Enroll client machines
 
 On each client machine that will use 9Router:
 
-1. Install the Tailscale client: [download page](https://tailscale.com/download).
+1. Install the Tailscale client:
+   - **macOS:** `brew install tailscale` or download from
+     [tailscale.com/download](https://tailscale.com/download)
+   - **Windows:** download from
+     [tailscale.com/download](https://tailscale.com/download)
+   - **Linux:** `curl -fsSL https://tailscale.com/install.sh | sh`
+   - **iOS/Android:** App Store / Google Play
+
 2. Join your Headscale (not Tailscale's hosted control plane):
 
    ```bash
    tailscale up --login-server https://headscale.yourdomain.com
    ```
 
-3. If you enabled node approval in Headscale, approve the node:
+   This opens a browser for first-time authentication. After that, the
+   machine is on your mesh permanently.
+
+3. Confirm the client can reach 9Router:
 
    ```bash
-   # On the VPS:
-   docker exec <name> headscale nodes list
-   docker exec <name> headscale nodes approve --node <id>
+   curl -sS -o /dev/null -w '%{http_code}\n' http://100.64.0.2:80/v1/models
+   # expect 401 (unauthorized, but reachable)
    ```
 
-Your base URL is `http://100.64.0.2:80` (replace with your sidecar's mesh IP).
+   A 401 means 9Router is reachable from the mesh and requires an API key -
+   exactly right. A connection refused or timeout means the mesh is not up
+   yet; wait a minute and retry.
+
 Proceed to [Post-install: verify](#post-install-verify).
 
 > **The HTTPS gap:** Headscale does not support per-node TLS certificate
 > provisioning, so `tailscale serve` runs in HTTP mode and `AUTH_COOKIE_SECURE`
 > is `false`. WireGuard encrypts the transport between mesh nodes, so traffic
-> is encrypted in transit. CLI tools (Claude Code, curl, etc.) accept `http://`
-> URLs fine. If you need `https://` for a client, run a local reverse proxy
-> (Caddy, nginx) on the client machine that terminates TLS and forwards to
-> the mesh IP.
+> is encrypted in transit - the HTTP is only plaintext inside the sidecar's
+> loopback. CLI tools (Claude Code, curl, etc.) accept `http://` URLs fine.
+> If a client requires `https://`, run a local reverse proxy on the client
+> machine:
+>
+> ```bash
+> # Install Caddy, then:
+> caddy reverse-proxy --from localhost:8443 --to http://100.64.0.2:80 \
+>   --internal-certs
+> ```
+>
+> This gives you `https://localhost:8443` with a self-signed cert that
+> forwards to the mesh IP over WireGuard.
 
 ---
 
@@ -762,9 +806,9 @@ Do not delete these volumes. `9router-data` is your entire configuration; if
 
 **Switching modes:** Change **Compose Path** and redeploy. All three files
 declare a `9router-data` volume with the same name, so within one Dokploy
-project your database, provider connections, and API keys carry across. Adjust
-`TS_AUTHKEY` / `HS_AUTHKEY` accordingly, redo the Tailscale- or Headscale-only
-steps if moving to those modes, and run `verify.sh` again against the new base
+project your database, provider connections, and API keys carry across. Set
+`TS_AUTHKEY` for Tailscale mode, or `HEADSCALE_DOMAIN` for Headscale mode (the
+pre-auth key is auto-generated). Run `verify.sh` again against the new base
 URL.
 
 ## Contents

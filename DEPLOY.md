@@ -95,7 +95,8 @@ JWT_SECRET=<openssl rand -hex 32>
 INITIAL_PASSWORD=<a real password>
 TS_AUTHKEY=tskey-auth-...        # Tailscale mode only
 HEADSCALE_DOMAIN=headscale.example.com  # Headscale mode only
-HS_AUTHKEY=...                   # Headscale mode only
+HEADSCALE_USER=9router           # Headscale mode, optional (default: 9router)
+HS_AUTHKEY=                      # Headscale mode, optional (auto-generated if empty)
 ```
 
 `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when it is
@@ -385,49 +386,50 @@ them to `<project>/files/`, which is why the compose file mounts them as
 startup from the environment variable. Set `HEADSCALE_DOMAIN` in Dokploy's
 Environment tab and the compose file handles the rest.
 
-## C3. First deploy: Headscale only
+## C3. Deploy (fully automated)
 
 Set **Compose Path** to `./docker-compose.headscale.yml`, set `JWT_SECRET`,
 `INITIAL_PASSWORD`, and `HEADSCALE_DOMAIN` in the Environment tab. Leave
-`HS_AUTHKEY` empty for now. Deploy.
+`HS_AUTHKEY` empty. Deploy.
 
-The Headscale container comes up. The Tailscale sidecar will fail to join (no
-auth key yet) - that is expected. Confirm Headscale is reachable:
+The Headscale container starts, waits for its own health check, then
+automatically:
+1. Creates the Headscale user (default `9router`, or the value of
+   `HEADSCALE_USER`).
+2. Generates a reusable pre-auth key.
+3. Writes the key to a shared volume.
+4. Prints the key to its container logs.
+
+The Tailscale sidecar waits for the key file, then joins the mesh automatically.
+No SSH to the VPS, no manual key generation, no second deploy.
+
+Watch the Headscale container logs in the Dokploy panel for:
+
+```
+========================================
+Headscale pre-auth key created: tskey-auth-xxxxxxxxx
+The Tailscale sidecar will use it automatically.
+========================================
+```
+
+Confirm Headscale is reachable (optional, from any machine):
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' https://headscale.yourdomain.com/health
 # expect 200
 ```
 
-## C4. Create a Headscale user and pre-auth key
+## C4. Find the sidecar's mesh IP
 
-```bash
-# find the headscale container name
-docker ps --format '{{.Names}}' | grep -i headscale
+The mesh IP is your base URL. Two ways to find it, neither requires SSH:
 
-# create a user
-docker exec <name> headscale users create 9router
+**From the Dokploy panel:** check the Tailscale container logs for a line like
+`tailscale up: setting hostname to "9router"; ... 100.64.0.2`.
 
-# generate a reusable pre-auth key
-docker exec <name> headscale preauthkeys create --user 9router --reusable
-```
+**From a client machine (after C5):** run `tailscale status` and look for the
+`9router` node.
 
-Copy the key. Set it as `HS_AUTHKEY` in Dokploy's Environment tab. Redeploy.
-
-## C5. Confirm the sidecar joined
-
-```bash
-docker ps --format '{{.Names}}' | grep -i tailscale
-docker exec <name> tailscale status
-# expect: node active, has a 100.64.0.x address
-
-docker exec <name> tailscale serve status
-# expect: http://100.64.0.x:80 -> http://127.0.0.1:20128
-```
-
-Note the mesh IP (`100.64.0.x`). That is your base URL.
-
-## C6. Enroll client machines
+## C5. Enroll client machines
 
 On each client, install the Tailscale client and join your Headscale:
 
@@ -442,7 +444,7 @@ docker exec <name> headscale nodes list
 docker exec <name> headscale nodes approve --node <id>
 ```
 
-## C7. The HTTPS gap
+## C6. The HTTPS gap
 
 Headscale does not support per-node TLS certificate provisioning
 (`tailscale cert` / HTTPS serve). So `tailscale serve` runs in **HTTP mode**
@@ -589,9 +591,9 @@ Do not delete these volumes. `9router-data` is your entire configuration; if
 
 Change **Compose Path** and redeploy. All three files declare a `9router-data`
 volume with the same name, so within one Dokploy project your database,
-provider connections, and API keys carry across. Adjust `TS_AUTHKEY` /
-`HS_AUTHKEY` accordingly, redo the Tailscale- or Headscale-only steps if you are
-moving to Path A or C, and run `verify.sh` again against the new base URL.
+provider connections, and API keys carry across. Set `TS_AUTHKEY` for Tailscale
+mode, or `HEADSCALE_DOMAIN` for Headscale mode (the pre-auth key is
+auto-generated). Run `verify.sh` again against the new base URL.
 
 # Notes
 
