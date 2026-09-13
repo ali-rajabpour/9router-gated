@@ -148,7 +148,10 @@ services:
           sleep 2
         done
         if [ -f /shared/preauthkey ] && [ -n "$$(cat /shared/preauthkey 2>/dev/null)" ]; then
-          echo "Pre-auth key already exists, skipping setup"
+          echo "Pre-auth key already exists:"
+          echo "========================================"
+          echo "$$(cat /shared/preauthkey)"
+          echo "========================================"
           exit 0
         fi
         echo "Creating Headscale user: ${HEADSCALE_USER:-9router}"
