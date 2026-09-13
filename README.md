@@ -569,18 +569,22 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
 ### Step 4: Deploy
 
 1. Click **Deploy** in the Dokploy panel.
-2. Watch the container logs in the Dokploy panel. On first start you will
-   see, in the Headscale setup container logs:
+2. Watch the `headscale-setup` container logs in the Dokploy panel. You will
+   see:
 
    ```
    ========================================
-   Headscale pre-auth key created: hskey-auth-xxxxxxxxx
-   The Tailscale sidecar will use it automatically.
+   Headscale pre-auth key: hskey-auth-xxxxxxxxx
+   Use this to join client machines to the mesh:
+     tailscale up --login-server=https://headscale.yourdomain.com --auth-key=hskey-auth-xxxxxxxxx
    ========================================
    ```
 
    The Tailscale sidecar waits for this key, then joins the mesh automatically.
    No SSH, no manual key generation, no second deploy.
+
+   > The key is printed on **every** deploy, not just the first. If you lose
+   > it, just redeploy and check the `headscale-setup` container logs.
 
 3. Wait for all containers to show as running. The sidecar may take 10-30
    seconds to come up after Headscale issues the key.

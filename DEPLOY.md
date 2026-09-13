@@ -385,14 +385,18 @@ automatically:
 The Tailscale sidecar waits for the key file, then joins the mesh automatically.
 No SSH to the VPS, no manual key generation, no second deploy.
 
-Watch the Headscale setup container logs in the Dokploy panel for:
+Watch the `headscale-setup` container logs in the Dokploy panel for:
 
 ```
 ========================================
-Headscale pre-auth key created: hskey-auth-xxxxxxxxx
-The Tailscale sidecar will use it automatically.
+Headscale pre-auth key: hskey-auth-xxxxxxxxx
+Use this to join client machines to the mesh:
+  tailscale up --login-server=https://headscale.yourdomain.com --auth-key=hskey-auth-xxxxxxxxx
 ========================================
 ```
+
+The key is printed on every deploy, not just the first. If you lose it,
+redeploy and check the `headscale-setup` container logs.
 
 Confirm Headscale is reachable (optional, from any machine):
 
