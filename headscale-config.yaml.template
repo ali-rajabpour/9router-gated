@@ -49,6 +49,17 @@ derp:
 
 disable_check_updates: false
 
+# DNS configuration. Required by headscale 0.29.x when override_local_dns
+# is true (the default). Using Cloudflare DNS for mesh clients.
+dns:
+  magic_dns: true
+  base_domain: tailnet.local
+  override_local_dns: true
+  nameservers:
+    global:
+      - 1.1.1.1
+      - 1.0.0.1
+
 node:
   # Nodes never expire (personal tailnet, few fixed machines).
   expiry: 0

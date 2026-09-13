@@ -22,7 +22,7 @@ services:
     command:
       - sh
       - -c
-      - "sed 's|HEADSCALE_DOMAIN|${HEADSCALE_DOMAIN}|g' /template/config.yaml > /shared/config.yaml && echo 'Headscale config written'"
+      - "sed 's|HEADSCALE_DOMAIN|${HEADSCALE_DOMAIN}|g' /template/config.yaml > /shared/config.yaml && echo 'Headscale config written with domain: ${HEADSCALE_DOMAIN}' && head -5 /shared/config.yaml"
     volumes:
       - ../files/headscale-config.yaml.template:/template/config.yaml:ro
       - shared:/shared
