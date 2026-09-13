@@ -97,6 +97,7 @@ TS_AUTHKEY=tskey-auth-...        # Tailscale mode only
 HEADSCALE_DOMAIN=headscale.example.com  # Headscale mode only
 HEADSCALE_USER=9router           # Headscale mode, optional (default: 9router)
 HS_AUTHKEY=                      # Headscale mode, optional (auto-generated if empty)
+CERT_RESOLVER=letsencrypt        # Headscale mode, optional (default: letsencrypt)
 ```
 
 `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when it is
@@ -366,8 +367,9 @@ Traefik (managed by Dokploy) terminates TLS on this hostname.
 ## C2. Deploy (fully automated)
 
 Set **Compose Path** to `./docker-compose.headscale.yml`, set `JWT_SECRET`,
-`INITIAL_PASSWORD`, and `HEADSCALE_DOMAIN` in the Environment tab. Leave
-`HS_AUTHKEY` empty. Deploy.
+`INITIAL_PASSWORD`, and `HEADSCALE_DOMAIN` in the Environment tab. Set
+`CERT_RESOLVER` if your Dokploy uses a non-default Traefik resolver (e.g.
+`cloudflare`). Leave `HS_AUTHKEY` empty. Deploy.
 
 The Headscale container starts, waits for its own health check, then
 automatically:
@@ -400,7 +402,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://headscale.yourdomain.com/healt
 
 The mesh IP is your base URL. Two ways to find it, neither requires SSH:
 
-**From the Dokploy panel:** check the Tailscale container logs for a line like
+**From the Dokploy panel:** check the `sidecar` container logs for a line like
 `tailscale up: setting hostname to "9router"; ... 100.64.0.2`.
 
 **From a client machine (after C5):** run `tailscale status` and look for the

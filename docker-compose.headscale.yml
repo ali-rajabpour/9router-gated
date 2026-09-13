@@ -116,7 +116,7 @@ services:
       - traefik.enable=true
       - traefik.http.routers.headscale.rule=Host(`${HEADSCALE_DOMAIN}`)
       - traefik.http.routers.headscale.entrypoints=websecure
-      - traefik.http.routers.headscale.tls.certresolver=letsencrypt
+      - traefik.http.routers.headscale.tls.certresolver=${CERT_RESOLVER:-letsencrypt}
       - traefik.http.routers.headscale.service=headscale-svc
       - traefik.http.services.headscale-svc.loadbalancer.server.port=8080
       # HTTP -> HTTPS redirect
@@ -182,7 +182,9 @@ services:
   #
   #    If HS_AUTHKEY is not set, the sidecar waits for the pre-auth key file
   #    written by the headscale-setup container above. Fully automatic.
-  tailscale:
+  #    Named "sidecar" (not "tailscale") to make clear this is the Headscale
+  #    mode mesh client, not a standalone Tailscale deployment.
+  sidecar:
     image: ${TAILSCALE_IMAGE:-tailscale/tailscale:latest}
     restart: unless-stopped
     hostname: ${TAILSCALE_HOSTNAME:-9router}
@@ -224,16 +226,16 @@ services:
       TS_USERSPACE: "true"
       TS_EXTRA_ARGS: --login-server=https://${HEADSCALE_DOMAIN} --reset
     volumes:
-      - tailscale-state:/var/lib/tailscale
+      - sidecar-state:/var/lib/tailscale
       - shared:/shared:ro
 
   9router:
     image: ${NINEROUTER_IMAGE:-decolua/9router:latest}
     pull_policy: always
     restart: unless-stopped
-    network_mode: "service:tailscale"
+    network_mode: "service:sidecar"
     depends_on:
-      - tailscale
+      - sidecar
     volumes:
       - 9router-data:/app/data
     environment:
@@ -248,7 +250,7 @@ services:
       HEADROOM_URL: http://headroom:8787
       ENABLE_REQUEST_LOGS: "false"
 
-  # Deliberately NOT in the tailscale netns. Same rationale as Tailscale
+  # Deliberately NOT in the sidecar netns. Same rationale as Tailscale
   # mode: sharing it would let this third-party image reach 9router over
   # 127.0.0.1 with no X-Forwarded-For, unlocking local privileges.
   headroom:
@@ -263,7 +265,7 @@ networks:
 
 volumes:
   9router-data:
-  tailscale-state:
+  sidecar-state:
   headscale-data:
   headscale-run:
   shared:

@@ -555,6 +555,7 @@ Traefik (managed by Dokploy) will terminate TLS on this hostname automatically.
    | `HEADSCALE_DOMAIN` | `headscale.yourdomain.com` (your actual domain) | Yes |
    | `HEADSCALE_USER` | `9router` (or any name you want) | No (defaults to `9router`) |
    | `HS_AUTHKEY` | Leave empty - the Headscale container generates one automatically | No |
+   | `CERT_RESOLVER` | `cloudflare` (or whatever Traefik resolver your Dokploy uses) | No (defaults to `letsencrypt`) |
 
    > `INITIAL_PASSWORD` is not optional. 9Router falls back to `123456` when
    > it is unset. `HEADSCALE_DOMAIN` is substituted into the Headscale config
@@ -591,7 +592,7 @@ it, neither requires SSH:
 
 **Option A - from the Dokploy panel:**
 
-1. In the Dokploy project, find the Tailscale container.
+1. In the Dokploy project, find the `sidecar` container.
 2. Open its logs. Look for a line like:
    `tailscale up: setting hostname to "9router"; ... 100.64.0.2`
 
