@@ -148,6 +148,13 @@ services:
           echo "Use this to join client machines to the mesh:"
           echo "  tailscale up --login-server=https://${HEADSCALE_DOMAIN} --auth-key=$$(cat /shared/preauthkey)"
           echo "========================================"
+          # One-time: approve a pending interactive auth request.
+          # Run via: APPROVE_AUTH_ID=hskey-authreq-xxx APPROVE_USER=name
+          if [ -n "$${APPROVE_AUTH_ID:-}" ] && [ -n "$${APPROVE_USER:-}" ]; then
+            echo "Approving auth request $$APPROVE_AUTH_ID for user $$APPROVE_USER"
+            headscale --config /shared/config.yaml users create $$APPROVE_USER 2>&1 || echo "User may already exist"
+            headscale --config /shared/config.yaml auth register --auth-id $$APPROVE_AUTH_ID --user $$APPROVE_USER 2>&1
+          fi
           exit 0
         fi
         echo "Creating Headscale user: ${HEADSCALE_USER:-9router}"
