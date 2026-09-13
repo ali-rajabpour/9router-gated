@@ -129,36 +129,37 @@ services:
     image: ${HEADSCALE_DEBUG_IMAGE:-headscale/headscale:0.29.3-debug}
     restart: "no"
     entrypoint: ["/busybox/sh", "-c"]
+    networks:
+      - dokploy-network
     command:
       - |
         echo "=== Config check ==="
         head -3 /shared/config.yaml
-        echo "=== Headscale binary ==="
-        which headscale || ls /headscale 2>/dev/null || echo "headscale not found"
-        echo "=== Waiting for Headscale ==="
+        echo "=== Waiting for Headscale HTTP ==="
         for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
           wget -q -O- http://headscale:8080/health 2>/dev/null && break
-          echo "Waiting for Headscale HTTP endpoint... (attempt $$i/30)"
+          echo "Waiting... (attempt $$i/30)"
           sleep 2
         done
-        echo "=== Creating user ==="
-        headscale --config /shared/config.yaml users create ${HEADSCALE_USER:-9router} 2>&1 || echo "User creation failed (may already exist)"
-        echo "=== Creating pre-auth key ==="
-        RAW=$$(headscale --config /shared/config.yaml preauthkeys create --user ${HEADSCALE_USER:-9router} --reusable 2>&1)
-        echo "Raw output: $$RAW"
-        KEY=$$(echo "$$RAW" | grep -o 'tskey-auth-[a-zA-Z0-9_-]*')
-        if [ -n "$$KEY" ]; then
-          echo "$$KEY" > /shared/preauthkey
-          echo "========================================"
-          echo "Headscale pre-auth key created: $$KEY"
-          echo "The Tailscale sidecar will use it automatically."
-          echo "========================================"
-        else
-          echo "ERROR: Failed to extract pre-auth key from output"
-          if [ -f /shared/preauthkey ] && [ -n "$$(cat /shared/preauthkey 2>/dev/null)" ]; then
-            echo "Using existing pre-auth key from previous deploy"
-          fi
-        fi
+        echo "=== Headscale is ready ==="
+        echo "=== CLI help for preauthkeys ==="
+        headscale preauthkeys create --help 2>&1 | head -20
+        echo "=== Reading API key ==="
+        API_KEY=$$(cat /var/lib/headscale/noise_private.key 2>/dev/null)
+        if [ -z "$$API_KEY" ]; then echo "No API key found"; exit 1; fi
+        echo "API key found (length: $${#API_KEY})"
+        echo "=== Creating user via API ==="
+        wget -q -O- --header="Authorization: Bearer $$API_KEY" \
+          --post-data='{"name": "${HEADSCALE_USER:-9router}"}' \
+          http://headscale:8080/api/v1/user 2>&1 || echo "User may already exist"
+        echo "=== Listing users ==="
+        wget -q -O- --header="Authorization: Bearer $$API_KEY" \
+          http://headscale:8080/api/v1/user 2>&1
+        echo "=== Creating pre-auth key via API ==="
+        wget -q -O- --header="Authorization: Bearer $$API_KEY" \
+          --post-data='{"user": "${HEADSCALE_USER:-9router}", "reusable": true, "expiry": 0}' \
+          http://headscale:8080/api/v1/preauthkey 2>&1
+        echo "=== Done ==="
     volumes:
       - headscale-data:/var/lib/headscale
       - shared:/shared
