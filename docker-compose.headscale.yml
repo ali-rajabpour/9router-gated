@@ -150,7 +150,10 @@ services:
           echo "========================================"
           # Auto-approve any pending interactive auth requests (e.g. Android
           # app does interactive login instead of using a pre-auth key).
-          for authid in $$(headscale --config /shared/config.yaml auth list --output json 2>/dev/null | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//'); do
+          echo "=== Checking pending auth requests ==="
+          AUTH_OUTPUT=$$(headscale --config /shared/config.yaml auth list 2>&1)
+          echo "$$AUTH_OUTPUT"
+          for authid in $$(echo "$$AUTH_OUTPUT" | grep -oE 'hskey-authreq-[a-zA-Z0-9_-]*'); do
             echo "Approving pending auth request: $$authid"
             headscale --config /shared/config.yaml auth register --auth-id $$authid --user ${HEADSCALE_USER:-9router} 2>&1 || true
           done
