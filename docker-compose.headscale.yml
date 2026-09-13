@@ -10,7 +10,7 @@
 # All configuration is via environment variables - no file editing needed.
 #
 # The headscale production image is distroless (no shell), so we use:
-# 1. An alpine init container to substitute HEADSCALE_DOMAIN in the config
+# 1. An alpine init container to write the config (template embedded in command)
 # 2. The production headscale image with command args (no shell needed)
 # 3. The headscale debug image (has busybox) for the user/key setup script
 services:
@@ -34,6 +34,10 @@ services:
         trusted_proxies: []
         noise:
           private_key_path: /var/lib/headscale/noise_private.key
+        # Unix socket for CLI access without authentication. Shared via
+        # the headscale-run volume so the setup container can use the CLI.
+        unix_socket: /var/run/headscale/headscale.sock
+        unix_socket_permission: "0770"
         prefixes:
           v4: 100.64.0.0/10
           v6: fd7a:115c:a1e0::/48
@@ -77,7 +81,6 @@ services:
         ENDOFCONFIG
         sed -i "s|HEADSCALE_DOMAIN|${HEADSCALE_DOMAIN}|g" /shared/config.yaml
         echo "Headscale config written with domain: ${HEADSCALE_DOMAIN}"
-        head -3 /shared/config.yaml
     volumes:
       - shared:/shared
 
@@ -94,6 +97,7 @@ services:
       - dokploy-network
     volumes:
       - headscale-data:/var/lib/headscale
+      - headscale-run:/var/run/headscale
       - shared:/shared:ro
     healthcheck:
       test: ["CMD", "headscale", "health"]
@@ -123,8 +127,10 @@ services:
 
   # 3. Setup container (debug image with busybox shell): waits for headscale
   #    to be healthy, then creates the user and pre-auth key automatically.
-  #    The key is written to a shared volume and printed to container logs.
-  #    Exits after completing. On redeploys, skips if key already exists.
+  #    Uses the Unix socket (shared via headscale-run volume) for CLI access
+  #    without authentication. The key is written to a shared volume and
+  #    printed to container logs. Exits after completing.
+  #    On redeploys, skips if key already exists.
   headscale-setup:
     image: ${HEADSCALE_DEBUG_IMAGE:-headscale/headscale:0.29.3-debug}
     restart: "no"
@@ -133,8 +139,6 @@ services:
       - dokploy-network
     command:
       - |
-        echo "=== Config check ==="
-        head -3 /shared/config.yaml
         echo "=== Waiting for Headscale HTTP ==="
         for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
           wget -q -O- http://headscale:8080/health 2>/dev/null && break
@@ -142,26 +146,37 @@ services:
           sleep 2
         done
         echo "=== Headscale is ready ==="
-        echo "=== CLI help for preauthkeys ==="
-        headscale preauthkeys create --help 2>&1 | head -20
-        echo "=== Reading API key ==="
-        API_KEY=$$(cat /var/lib/headscale/noise_private.key 2>/dev/null)
-        if [ -z "$$API_KEY" ]; then echo "No API key found"; exit 1; fi
-        echo "API key found (length: $${#API_KEY})"
-        echo "=== Creating user via API ==="
-        wget -q -O- --header="Authorization: Bearer $$API_KEY" \
-          --post-data='{"name": "${HEADSCALE_USER:-9router}"}' \
-          http://headscale:8080/api/v1/user 2>&1 || echo "User may already exist"
-        echo "=== Listing users ==="
-        wget -q -O- --header="Authorization: Bearer $$API_KEY" \
-          http://headscale:8080/api/v1/user 2>&1
-        echo "=== Creating pre-auth key via API ==="
-        wget -q -O- --header="Authorization: Bearer $$API_KEY" \
-          --post-data='{"user": "${HEADSCALE_USER:-9router}", "reusable": true, "expiry": 0}' \
-          http://headscale:8080/api/v1/preauthkey 2>&1
-        echo "=== Done ==="
+        if [ -f /shared/preauthkey ] && [ -n "$$(cat /shared/preauthkey 2>/dev/null)" ]; then
+          echo "Pre-auth key already exists, skipping setup"
+          exit 0
+        fi
+        echo "=== Creating user ==="
+        headscale --config /shared/config.yaml users create ${HEADSCALE_USER:-9router} 2>&1 || echo "User may already exist"
+        echo "=== Listing users to find ID ==="
+        USERS=$$(headscale --config /shared/config.yaml users list --output json 2>&1)
+        echo "Users: $$USERS"
+        USER_ID=$$(echo "$$USERS" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+        if [ -z "$$USER_ID" ]; then
+          echo "ERROR: Could not find user ID"
+          exit 1
+        fi
+        echo "Found user ID: $$USER_ID"
+        echo "=== Creating pre-auth key ==="
+        RAW=$$(headscale --config /shared/config.yaml preauthkeys create --user $$USER_ID --reusable --expiration 87600h 2>&1)
+        echo "Raw output: $$RAW"
+        KEY=$$(echo "$$RAW" | grep -o 'tskey-auth-[a-zA-Z0-9_-]*')
+        if [ -n "$$KEY" ]; then
+          echo "$$KEY" > /shared/preauthkey
+          echo "========================================"
+          echo "Headscale pre-auth key created: $$KEY"
+          echo "The Tailscale sidecar will use it automatically."
+          echo "========================================"
+        else
+          echo "ERROR: Failed to extract pre-auth key from output"
+        fi
     volumes:
       - headscale-data:/var/lib/headscale
+      - headscale-run:/var/run/headscale
       - shared:/shared
     depends_on:
       - headscale
@@ -238,4 +253,5 @@ volumes:
   9router-data:
   tailscale-state:
   headscale-data:
+  headscale-run:
   shared:
