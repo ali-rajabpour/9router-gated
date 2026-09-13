@@ -14,17 +14,71 @@
 # 2. The production headscale image with command args (no shell needed)
 # 3. The headscale debug image (has busybox) for the user/key setup script
 services:
-  # 1. Alpine init container: substitutes HEADSCALE_DOMAIN in the config
-  #    template and writes the result to a shared volume. Exits immediately.
+  # 1. Alpine init container: writes the headscale config with HEADSCALE_DOMAIN
+  #    substituted to a shared volume. The config template is embedded directly
+  #    in the command (heredoc) so it is always in sync with the compose file.
+  #    No file mount needed for the config template. Exits immediately.
   headscale-init:
     image: alpine:3.20
     restart: "no"
     command:
       - sh
       - -c
-      - "sed 's|HEADSCALE_DOMAIN|${HEADSCALE_DOMAIN}|g' /template/config.yaml > /shared/config.yaml && echo 'Headscale config written with domain: ${HEADSCALE_DOMAIN}' && head -5 /shared/config.yaml"
+      - |
+        cat > /shared/config.yaml << 'ENDOFCONFIG'
+        server_url: https://HEADSCALE_DOMAIN
+        listen_addr: 0.0.0.0:8080
+        metrics_listen_addr: 127.0.0.1:9090
+        grpc_listen_addr: 127.0.0.1:50443
+        grpc_allow_insecure: false
+        trusted_proxies: []
+        noise:
+          private_key_path: /var/lib/headscale/noise_private.key
+        prefixes:
+          v4: 100.64.0.0/10
+          v6: fd7a:115c:a1e0::/48
+          allocation: sequential
+        derp:
+          server:
+            enabled: true
+            region_id: 999
+            region_code: "headscale"
+            region_name: "Headscale Embedded DERP"
+            verify_clients: true
+            stun_listen_addr: "0.0.0.0:3478"
+            private_key_path: /var/lib/headscale/derp_server_private.key
+            automatically_add_embedded_derp_region: true
+          urls: []
+          paths: []
+          auto_update_enabled: true
+          update_frequency: 3h
+        disable_check_updates: false
+        dns:
+          magic_dns: true
+          base_domain: tailnet.local
+          override_local_dns: true
+          nameservers:
+            global:
+              - 1.1.1.1
+              - 1.0.0.1
+        node:
+          expiry: 0
+          ephemeral:
+            inactivity_timeout: 30m
+        database:
+          type: sqlite
+          sqlite:
+            path: /var/lib/headscale/db.sqlite
+            write_ahead_log: true
+            wal_autocheckpoint: 1000
+        log:
+          level: info
+          format: text
+        ENDOFCONFIG
+        sed -i "s|HEADSCALE_DOMAIN|${HEADSCALE_DOMAIN}|g" /shared/config.yaml
+        echo "Headscale config written with domain: ${HEADSCALE_DOMAIN}"
+        head -3 /shared/config.yaml
     volumes:
-      - ../files/headscale-config.yaml.template:/template/config.yaml:ro
       - shared:/shared
 
   # 2. Headscale control plane + embedded DERP relay. Public on your domain
