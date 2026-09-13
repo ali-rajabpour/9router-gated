@@ -357,8 +357,10 @@ membership as a second gate.
 ### Step 7: Install Tailscale on client machines
 
 1. Install the Tailscale client on each machine that will use 9Router:
-   - **macOS:** `brew install tailscale` or download from
-     [tailscale.com/download](https://tailscale.com/download)
+   - **macOS:** the Tailscale app, from
+     [tailscale.com/download](https://tailscale.com/download) or the Mac App
+     Store, is recommended. Avoid also running a Homebrew `tailscale` service
+     next to it: that is a second, independent client with its own identity.
    - **Windows:** download from
      [tailscale.com/download](https://tailscale.com/download)
    - **Linux:** `curl -fsSL https://tailscale.com/install.sh | sh`
