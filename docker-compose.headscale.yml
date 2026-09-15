@@ -233,6 +233,12 @@ services:
       # calls it across the bridge without a token. Only 9router and the
       # sidecar share this network, and no mesh peer can reach port 8787.
       HEADROOM_COMPRESS_ALLOW_REMOTE: "1"
+      # The default "coding" profile freezes earlier turns to keep Anthropic's
+      # prefix cache warm, which saves little on providers routed through
+      # 9router. "balanced" rewrites earlier turns losslessly and keeps the
+      # last four intact; dedupe drops content repeated verbatim across turns.
+      HEADROOM_SAVINGS_PROFILE: "balanced"
+      HEADROOM_DEDUPE: "1"
     security_opt:
       - no-new-privileges:true
 

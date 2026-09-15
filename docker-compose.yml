@@ -54,6 +54,13 @@ services:
     restart: unless-stopped
     expose:
       - "8787"
+    environment:
+      # The default "coding" profile freezes earlier turns to keep Anthropic's
+      # prefix cache warm, which saves little on providers routed through
+      # 9router. "balanced" rewrites earlier turns losslessly and keeps the
+      # last four intact; dedupe drops content repeated verbatim across turns.
+      HEADROOM_SAVINGS_PROFILE: "balanced"
+      HEADROOM_DEDUPE: "1"
 
 volumes:
   9router-data:

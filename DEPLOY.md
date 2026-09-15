@@ -531,7 +531,7 @@ ss -tlnp | grep -E '20128|8787'
 2. Connect providers. Dashboard → Providers.
 3. Dashboard → generate an API key.
 4. Enable Headroom: Endpoint → Token Saver → Headroom. The URL should already
-   read `http://headroom:8787`; recheck status, then enable.
+   read `http://headroom:8787`; recheck status, then enable. Raise the Headroom timeout there to 20000 ms: the 3000 ms default times out on large agent requests, and a timed-out request is sent uncompressed.
 
 Point clients at `<base-url>/v1` with that API key. Claude Code:
 
