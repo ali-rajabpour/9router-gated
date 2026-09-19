@@ -750,10 +750,12 @@ Polling instead. **Dokploy and then Schedule Jobs and then Create**:
   ```
 
 `pull_policy: always` in the Tailscale and SSH compose files makes the re-pull
-explicit rather than incidental. The Headscale compose file pins every image
-instead; update it by setting `NINEROUTER_IMAGE` to a newer tag and
-redeploying, and skip the scheduled job. Confirm the exact endpoint name against your panel's
-`/swagger`. It has been `compose.deploy` in recent versions.
+explicit rather than incidental. To deploy a specific 9Router version in any
+mode, set `NINEROUTER_IMAGE=decolua/9router:<version>` in Dokploy's Environment
+tab, then redeploy. This is required for Headscale mode, which defaults to a
+pinned 9Router image; skip the scheduled job when you want deliberate updates.
+Confirm the exact endpoint name against your panel's `/swagger`. It has been
+`compose.deploy` in recent versions.
 
 **Understand what you turned on.** Tracking `:latest` with an unattended
 redeploy means an upstream compromise reaches your provider OAuth tokens
