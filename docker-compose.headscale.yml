@@ -1,170 +1,28 @@
-# Headscale access mode. Self-hosted Tailscale control plane on your own
-# domain, for networks where *.tailscale.com is filtered. Everything a client
-# sends travels as HTTPS on 443: control traffic and the embedded DERP relay
-# both sit behind Traefik. 9router is reachable only from the mesh.
+# Headscale access mode: join your own Headscale control plane (a central hub
+# that serves all your private apps). This stack runs no control plane of its
+# own. It ships one userspace Tailscale sidecar that registers with it
+# (https://HUB_DOMAIN) using a single-use pre-auth key tagged tag:nine-router, and forwards mesh tcp/80 to 9router over the Docker bridge.
+# 9router is reachable only from the mesh; nothing here is public.
 #
-# Two Headscale users:
-#   Routers  the sidecar below. Receives connections, never initiates them.
-#   Devices  your laptops and phones. May reach Routers on tcp/80, and may
-#            ping each other so they appear in each other's device list.
-# No TCP or UDP between devices, and the router can reach none of them.
+# The control plane owns users, policy, keys and relays. It must provide a
+# login server URL (HUB_DOMAIN), a single-use pre-auth key tagged tag:nine-router,
+# and a policy granting the devices of user "owner" access to tag:nine-router on
+# tcp/80 and nothing else. Device enrolment, node deletion and policy changes
+# are control-plane operations too.
 #
-# One-shot actions, set in Dokploy's Environment tab and redeploy:
-#   NEW_DEVICE=true         print a single-use key for Devices, valid 1 hour
-#   DELETE_NODE_IDS="3 4"   delete nodes by ID (IDs are in the headscale log)
-# Afterwards set NEW_DEVICE=false and empty DELETE_NODE_IDS, then redeploy.
+# Environment (Dokploy's Environment tab):
+#   HUB_DOMAIN   public name of the control plane, e.g. hub.example.com (required)
+#   TS_AUTHKEY   single-use tag:nine-router key (required). It is
+#                consumed on first start only (TS_AUTH_ONCE + hub-state volume);
+#                keep the spent value in place, an empty one fails the deploy.
+#   JWT_SECRET, INITIAL_PASSWORD  9router secrets (required)
 services:
-  # Control plane + embedded DERP relay. The only public service in the stack.
-  # The -debug image is used because it ships busybox, which lets this one
-  # container write its own config and bootstrap users and keys. The regular
-  # image is distroless and would need two helper containers for the same job.
-  headscale:
-    image: ${HEADSCALE_IMAGE:-headscale/headscale:0.29.3-debug}
-    restart: unless-stopped
-    entrypoint: ["/busybox/sh", "-c"]
-    command:
-      - |
-        mkdir -p /etc/headscale /var/run/headscale
-        cat > /etc/headscale/config.yaml <<'EOF'
-        server_url: https://${HEADSCALE_DOMAIN:?HEADSCALE_DOMAIN is required}
-        listen_addr: 0.0.0.0:8080
-        metrics_listen_addr: 127.0.0.1:9090
-        grpc_listen_addr: 127.0.0.1:50443
-        grpc_allow_insecure: false
-        noise:
-          private_key_path: /var/lib/headscale/noise_private.key
-        prefixes:
-          v4: 100.64.0.0/10
-          v6: fd7a:115c:a1e0::/48
-          allocation: sequential
-        derp:
-          server:
-            enabled: true
-            region_id: 999
-            region_code: headscale
-            region_name: Headscale Embedded DERP
-            verify_clients: true
-            # Required by Headscale, but UDP 3478 is not published, so every
-            # client relays over HTTPS instead of attempting UDP.
-            stun_listen_addr: 0.0.0.0:3478
-            private_key_path: /var/lib/headscale/derp_server_private.key
-            automatically_add_embedded_derp_region: true
-          # Tailscale's public relays live on *.tailscale.com. Never use them.
-          urls: []
-          paths: []
-          auto_update_enabled: false
-        disable_check_updates: true
-        dns:
-          magic_dns: false
-          override_local_dns: false
-        node:
-          expiry: 0
-        database:
-          type: sqlite
-          sqlite:
-            path: /var/lib/headscale/db.sqlite
-            write_ahead_log: true
-        policy:
-          mode: file
-          path: /etc/headscale/policy.json
-        taildrop:
-          enabled: false
-        logtail:
-          enabled: false
-        log:
-          level: info
-        EOF
-
-        # The policy names users that do not exist on a fresh database, so the
-        # first boot starts deny-all and switches over once the users exist.
-        allow='{"acls":[{"action":"accept","src":["Devices@"],"dst":["Routers@:80"]},{"action":"accept","proto":"icmp","src":["Devices@"],"dst":["Devices@:*"]}]}'
-        if [ -f /var/lib/headscale/.users-ok ]; then echo "$$allow"; else echo '{"grants":[]}'; fi > /etc/headscale/policy.json
-
-        rm -f /var/lib/headscale/.ready
-        headscale serve &
-        pid=$$!
-        trap 'kill -TERM $$pid' TERM INT
-        until headscale health >/dev/null 2>&1; do
-          kill -0 $$pid 2>/dev/null || exit 1
-          sleep 1
-        done
-
-        # No jq in busybox: drop quotes and whitespace, one object per line,
-        # then take the id from the line whose name matches.
-        uid() { headscale users list -o json | tr -d ' \n\t"' | tr '{}' '\n\n' | grep -E "(^|,)name:$$1(,|$$)" | grep -oE '(^|,)id:[0-9]+' | grep -oE '[0-9]+' | head -1; }
-        key() { headscale preauthkeys create --user "$$(uid $$1)" --expiration 1h | grep -o 'hskey-auth-[A-Za-z0-9_-]*'; }
-
-        for u in Routers Devices; do
-          [ -n "$$(uid $$u)" ] || headscale users create $$u
-        done
-        if [ ! -f /var/lib/headscale/.users-ok ] && [ -n "$$(uid Routers)" ] && [ -n "$$(uid Devices)" ]; then
-          echo "$$allow" > /etc/headscale/policy.json
-          touch /var/lib/headscale/.users-ok
-          kill -HUP $$pid
-        fi
-
-        for id in $$DELETE_NODE_IDS; do
-          headscale nodes delete --identifier "$$id" --force
-        done
-
-        # The sidecar needs a key only until it has registered. Single use,
-        # one hour, never printed.
-        umask 077
-        if headscale nodes list --user Routers -o json | grep -q '"id"'; then
-          rm -f /router/key
-        else
-          key Routers > /router/key
-        fi
-
-        if [ "$$NEW_DEVICE" = true ]; then
-          echo "========================================"
-          echo "Single-use device key, valid 1 hour:"
-          echo "  tailscale up --login-server=https://${HEADSCALE_DOMAIN} --accept-dns=false --auth-key=$$(key Devices)"
-          echo "Set NEW_DEVICE=false in Dokploy when done."
-          echo "========================================"
-        fi
-
-        headscale nodes list
-        touch /var/lib/headscale/.ready
-        wait $$pid
-        wait $$pid
-    environment:
-      NEW_DEVICE: ${NEW_DEVICE:-}
-      DELETE_NODE_IDS: ${DELETE_NODE_IDS:-}
-    volumes:
-      - headscale-data:/var/lib/headscale
-      - router-key:/router
-    networks:
-      - dokploy-network
-    healthcheck:
-      test: ["CMD", "/busybox/sh", "-c", "test -f /var/lib/headscale/.ready && headscale health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    security_opt:
-      - no-new-privileges:true
-    deploy:
-      resources:
-        limits:
-          memory: 256m
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.headscale.rule=Host(`${HEADSCALE_DOMAIN}`)
-      - traefik.http.routers.headscale.entrypoints=websecure
-      # Empty when the certificate is uploaded in Dokploy (e.g. Cloudflare
-      # Origin). Set CERT_RESOLVER=letsencrypt to use ACME instead.
-      - traefik.http.routers.headscale.tls.certresolver=${CERT_RESOLVER:-}
-      - traefik.http.routers.headscale.service=headscale-svc
-      - traefik.http.services.headscale-svc.loadbalancer.server.port=8080
-
   # Mesh client in userspace mode: no NET_ADMIN, no /dev/net/tun.
   sidecar:
-    image: ${TAILSCALE_IMAGE:-tailscale/tailscale:v1.102.3}
+    image: ${TAILSCALE_IMAGE:-tailscale/tailscale:v1.102.4}
     restart: unless-stopped
     depends_on:
-      headscale:
-        condition: service_healthy
+      - 9router
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -175,21 +33,27 @@ services:
         # container's bridge address it is an ordinary remote client.
         mkdir -p /config
         echo '{"TCP":{"80":{"TCPForward":"9router:20128"}}}' > /config/serve.json
-        if [ -s /router/key ]; then export TS_AUTHKEY="$$(cat /router/key)"; fi
         exec /usr/local/bin/containerboot
     environment:
-      # Mesh name only. A container hostname of 9router would add
-      # "9router -> this container" to /etc/hosts, and the forward below would
+      # Mesh name only (9router.<MagicDNS base>), set via TS_HOSTNAME and not the
+      # compose `hostname:` key. A container hostname of 9router would add
+      # "9router -> this container" to /etc/hosts, and the forward above would
       # dial the sidecar itself instead of the 9router service.
       TS_HOSTNAME: 9router
+      # Tagged by the key (tag:nine-router), so no --advertise-tags here. Tagged
+      # nodes never expire.
+      TS_AUTHKEY: ${TS_AUTHKEY:?TS_AUTHKEY is required, a single-use tag:nine-router key}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
       TS_USERSPACE: "true"
       TS_AUTH_ONCE: "true"
-      TS_EXTRA_ARGS: --login-server=https://${HEADSCALE_DOMAIN} --accept-dns=false
+      TS_EXTRA_ARGS: --login-server=https://${HUB_DOMAIN:?HUB_DOMAIN is required, the control plane's public name} --accept-dns=false
     volumes:
-      - sidecar-state:/var/lib/tailscale
-      - router-key:/router:ro
+      # Node identity, so the sidecar does not re-register after a restart.
+      - hub-state:/var/lib/tailscale
+    tmpfs: [/config, /tmp, /var/run]
+    read_only: true
+    cap_drop: ["ALL"]
     security_opt:
       - no-new-privileges:true
     deploy:
@@ -242,12 +106,6 @@ services:
     security_opt:
       - no-new-privileges:true
 
-networks:
-  dokploy-network:
-    external: true
-
 volumes:
   9router-data:
-  sidecar-state:
-  headscale-data:
-  router-key:
+  hub-state:

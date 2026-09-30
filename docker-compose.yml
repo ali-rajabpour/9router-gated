@@ -1,6 +1,6 @@
 # Tailscale access mode. For networks where Tailscale is filtered, deploy
-# docker-compose.ssh.yml or docker-compose.headscale.yml instead; all three
-# share the 9router-data volume.
+# docker-compose.ssh.yml or docker-compose.headscale.yml (joins your own
+# Headscale control plane) instead; all three share the 9router-data volume.
 services:
   # Tailscale sidecar owns the network namespace. Userspace mode on purpose:
   # no NET_ADMIN, no /dev/net/tun, nothing added to the host's networking.

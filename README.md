@@ -2,13 +2,13 @@
 
 A hardened [9Router](https://github.com/decolua/9router) deployment for
 [Dokploy](https://dokploy.com), reachable only by you. Three access modes -
-[Tailscale](https://tailscale.com), an SSH tunnel, or a self-hosted
-[Headscale](https://headscale.net) mesh - sharing one stack and one database.
+[Tailscale](https://tailscale.com), an SSH tunnel, or your own central
+[Headscale](https://headscale.net) control plane -
+sharing one stack and one database.
 
 No public DNS record. No Traefik route for 9Router. Nothing about 9Router is
-exposed to the internet. (Headscale mode adds one public service - the
-Headscale control plane itself - but 9Router stays private.) Nothing about
-the rest of your server changes.
+exposed to the internet, in any mode. Nothing about the rest of your server
+changes.
 
 ---
 
@@ -108,17 +108,17 @@ Reachable at `http://127.0.0.1:20128` on that machine.
 client ──SSH──> [vps 127.0.0.1:20128] ──docker bridge──> [9router] ──> [headroom :8787]
 ```
 
-**Headscale.** A self-hosted Tailscale control plane on your own domain, for
-networks where `*.tailscale.com` is SNI-filtered. Headscale and its embedded
-DERP relay sit behind Traefik on `headscale.yourdomain.com`, so everything a
-client sends is HTTPS on 443 (Cloudflare's proxy in front is fine). A Tailscale
-sidecar joins as the `Routers` user and forwards port 80 to 9Router over the
-stack's private Docker bridge. Your
-devices join as `Devices`, which may reach the router on port 80 and ping each
-other, nothing more. Reachable at `http://100.64.0.1` from your devices.
+**Headscale.** Joins your own Headscale control plane (a central hub that
+serves all your private apps), for networks where `*.tailscale.com` is
+SNI-filtered. This stack runs no control plane. A Tailscale sidecar joins it
+with a single-use `tag:nine-router` pre-auth key and forwards port 80 to 9Router
+over the stack's private Docker bridge. The control plane's policy lets the
+owner's devices reach that tag on port 80 and nothing else. Everything a client
+sends is HTTPS on 443 to the control plane (Cloudflare's proxy in front is
+fine). Reachable at `http://9router.mesh.internal` from your devices.
 
 ```
-device ──HTTPS 443 (DERP)──> [headscale] ──> [sidecar :80] ──bridge──> [9router :20128] ──> [headroom :8787]
+device ──WireGuard, HTTPS 443 relay──> [mesh] ──> [sidecar :80] ──bridge──> [9router :20128] ──> [headroom :8787]
 ```
 
 Common to all three:
@@ -184,12 +184,13 @@ treated as the remote client it is.
 Default to Tailscale. It is less to run, it gives you a real HTTPS URL that
 every client accepts, and tailnet membership is a genuine second gate.
 
-Use Headscale if Tailscale is filtered on your network and you want a mesh
-VPN rather than per-machine SSH tunnels. You run a control plane + DERP relay
-on your own domain, so SNI filters on `*.tailscale.com` miss it, and all of it
-travels as HTTPS on 443 through the Traefik you already run. More
-infrastructure than SSH, but less per-machine friction: join the mesh once,
-every CLI and IDE on that machine reaches 9Router with no tunnel to maintain.
+Use Headscale mode if Tailscale is filtered on your network (SNI filtering of
+`*.tailscale.com`) and you want a mesh VPN rather than per-machine SSH tunnels.
+It joins the Headscale control plane you already run (control plane + DERP
+relays on your own domain), so those filters miss it and everything travels as
+HTTPS on 443. It needs that control plane to exist, but adds nothing public to
+this server: join the mesh once, and every CLI and IDE on that machine reaches
+9Router with no tunnel to maintain.
 
 Use SSH if Tailscale cannot connect from your network and you would rather not
 add a mesh VPN at all. Check first:
@@ -205,7 +206,7 @@ it. Take the SSH path.
 
 The trade-off is honest in all directions. Tailscale gives you a real
 certificate and a stable hostname; Headscale gives you a mesh that survives
-SNI filtering at the cost of running a control plane and no per-node TLS
+SNI filtering at the cost of depending on the hub and no per-node TLS
 certificate (HTTP over WireGuard, not HTTPS); SSH gives you zero extra
 infrastructure and survives filtering, at the cost of a tunnel to keep alive
 on each machine and no TLS for clients that insist on it.
@@ -522,40 +523,51 @@ Proceed to [Post-install: verify](#post-install-verify).
 **Best for:** networks where Tailscale is SNI-filtered, and you want a mesh
 rather than per-machine SSH tunnels, over nothing but HTTPS.
 
+This mode runs no control plane. 9router only ships a Tailscale sidecar that
+joins your own Headscale control plane, a central hub that owns the users, the
+access policy, the keys and the relays for all your private apps. Running that
+control plane (deploying it, enrolling devices, deleting nodes, changing
+policy, backups, upgrades) is done there, not here. It must provide:
+
+- a login server URL, the public name `HUB_DOMAIN` (for example
+  `hub.example.com`)
+- a single-use pre-auth key tagged `tag:nine-router`
+- a policy granting the owner's devices (user `owner`) `tag:nine-router` on
+  `tcp/80`
+
 **Compose file:** `./docker-compose.headscale.yml`
-**Client URL:** `http://100.64.0.1` (the router's mesh IP)
+**Client URL:** `http://9router.mesh.internal` (the MagicDNS name of this
+node)
 
 ### How it is locked down
 
-- Two Headscale users. `Routers` holds the 9Router sidecar, `Devices` holds
-  your machines. The access policy allows `Devices` to reach `Routers` on
-  `tcp/80`, and allows devices to ping each other so every device shows the
-  full list. There is no TCP or UDP between devices, and the router cannot
-  open connections to your devices.
-- The router's key is single-use, expires after one hour, is passed over a
-  private volume and is never printed. Devices are approved one at a time by
-  you, from the Headscale container.
+- The policy grants the devices of user `owner` access to `tag:nine-router` on
+  `tcp/80` and nothing else. Tagged services cannot initiate connections to
+  devices or to each other. Port `20128` and every other port on the mesh
+  address is unreachable.
+- The sidecar's key is single-use, valid for one hour, tagged `tag:nine-router`
+  by the control plane. Tags are never chosen by the client, so the sidecar
+  cannot promote itself.
 - Every image is pinned. The deploy refuses to start without `JWT_SECRET`,
-  `INITIAL_PASSWORD`, and `HEADSCALE_DOMAIN`.
-- UDP is never used. Control traffic and the DERP relay both travel as HTTPS on
-  443 through Traefik, so no port is opened on the server.
+  `INITIAL_PASSWORD`, `HUB_DOMAIN` and `TS_AUTHKEY`.
+- UDP is never used. Control traffic and the DERP relays travel as HTTPS on 443
+  through the control plane's Cloudflare proxy, and this stack publishes no
+  port and has no Traefik route at all.
 
 ### Prerequisites
 
-- A domain name (or subdomain) you control, with DNS access
+- A running Headscale control plane and its public name (`HUB_DOMAIN`, for
+  example `hub.example.com`), with `tag:nine-router` in its policy.
+- Your Mac (or other device) enrolled on it with the Tailscale client. It can
+  stay signed in to other accounts; `tailscale switch --list` shows them.
 - The Tailscale client on every machine that will use 9Router
   ([download](https://tailscale.com/download))
 
-### Step 1: Point DNS at your VPS
+### Step 1: Mint the sidecar key
 
-```
-headscale.yourdomain.com  A  <vps-ip>
-```
-
-Cloudflare's proxy (orange cloud) works; both the control protocol and the
-DERP relay pass through it. With the proxy on, upload a Cloudflare Origin
-certificate in Dokploy and leave `CERT_RESOLVER` empty. With DNS only, set
-`CERT_RESOLVER=letsencrypt`.
+Do this right before Step 3; the key is valid for one hour and works once.
+On your Headscale control plane, create a single-use pre-auth key tagged
+`tag:nine-router` (starts with `hskey-auth-`).
 
 ### Step 2: Create the Dokploy project
 
@@ -566,98 +578,56 @@ certificate in Dokploy and leave `CERT_RESOLVER` empty. With DNS only, set
    `https://github.com/ali-rajabpour/9router-gated`
 5. Set **Compose Path** to `./docker-compose.headscale.yml`.
 6. Under **Advanced**, set **Isolated Deployments** to **OFF**.
-7. **Do not add a domain.** The Headscale container carries its own Traefik
-   labels; 9Router has none.
+7. **Do not add a domain.** Nothing in this stack has a Traefik route, and
+   nothing attaches to `dokploy-network`.
 
-### Step 3: Set environment variables
+### Step 3: Set environment variables and deploy
 
 | Variable | Value | Required? |
 |---|---|---|
 | `JWT_SECRET` | The hex string from `openssl rand -hex 32` | Yes |
 | `INITIAL_PASSWORD` | The base64 string from `openssl rand -base64 24` | Yes |
-| `HEADSCALE_DOMAIN` | `headscale.yourdomain.com` | Yes |
-| `CERT_RESOLVER` | Empty for an uploaded certificate, `letsencrypt` for ACME | No |
-| `NEW_DEVICE` | `false`. Set `true` only to print a CLI enrollment key | No |
-| `DELETE_NODE_IDS` | Empty. Node IDs to delete, space-separated, then empty again | No |
+| `HUB_DOMAIN` | The control plane's public name, `hub.example.com` (no `https://`) | Yes |
+| `TS_AUTHKEY` | The `hskey-auth-...` key from Step 1 | Yes |
 
-### Step 4: Deploy
+Click **Deploy**. The sidecar logs `hostname "9router"` and its mesh address
+on registration, and the control plane's node list shows `9router` online with
+`tag:nine-router`.
 
-Click **Deploy**, then open the `headscale` container logs. The node list at
-the end shows the router as node 1 under `Routers`:
+After the first successful start the key is spent. **Leave the spent value in
+`TS_AUTHKEY`**: the compose file fails the deploy when the variable is empty,
+and `TS_AUTH_ONCE` plus the `hub-state` volume mean the key is never read
+again. A forgotten variable therefore fails loudly instead of starting a
+sidecar that cannot register.
 
-```
-ID | Hostname | Name    | ... | User    | ...
-1  | 9router  | 9router | ... | Routers | ...
-```
+### Step 4: Verify from the Mac
 
-### Step 5: Enroll a device
-
-**Tailscale app (macOS, Windows, Android, iOS):**
-
-1. In the app, choose to use a custom login server (on Android: account
-   menu, then change server) and enter `https://headscale.yourdomain.com`.
-2. The app opens a browser page showing a command like:
-
-   ```
-   headscale auth register --auth-id hskey-authreq-... --user USERNAME
-   ```
-
-3. In Dokploy, open the `headscale` container's **Terminal** and run that
-   command with `--user Devices`. The device joins immediately.
-
-**CLI (Linux, or macOS with the CLI):** the same flow works with
-`tailscale up --login-server=https://headscale.yourdomain.com --accept-dns=false`.
-Alternatively set `NEW_DEVICE=true`, redeploy, and run the `tailscale up ...
---auth-key=...` line printed in the `headscale` log. Each printed key enrolls
-one device and expires in an hour. Set `NEW_DEVICE=false` afterwards.
-
-Then, from the device:
+On the Headscale account:
 
 ```bash
-tailscale status              # 9router 100.64.0.1 Routers, plus your other devices
-curl -sS -o /dev/null -w '%{http_code}\n' http://100.64.0.1/v1/models
-# expect 401 (reachable, needs an API key)
+tailscale status                                   # 9router listed
+nc -vz 9router.mesh.internal 80                    # succeeds
+nc -vz -w 5 9router.mesh.internal 20128            # must fail: policy allows tcp/80 only
+./verify.sh http://9router.mesh.internal           # 401, 403, 401, 307
 ```
 
-Always register devices under `Devices`. A device under any other user gets
-no access at all.
+Then point Claude Code at `http://9router.mesh.internal` and run a real
+session, see [connect your CLI and IDE](#post-install-connect-your-cli-and-ide).
 
-### Step 6: Remove a device
+### Starting over: replacing the sidecar identity
 
-Read its ID from the node list in the `headscale` logs, set
-`DELETE_NODE_IDS=<id>`, redeploy, then empty it again. On the device, run
-`tailscale logout`.
-
-### Starting over, and stale devices
-
-A Tailscale client keeps its last network map, and a wiped or replaced control
-plane has no way to tell it to forget. On top of that, when an update would
-leave a client with zero peers, the empty list is dropped from the message and
-the client reads it as "no change". That is why deleted devices kept showing up.
-
-Two things fix it here. Every device's peer list always contains the router,
-which is never removed, so it is never emptied and removals are delivered. And for a real fresh start, give
-the stack new volumes (a new Dokploy compose, or delete `headscale-data` and
-`sidecar-state`), then on **every** old device:
-
-```bash
-tailscale logout
-tailscale switch --list                          # leftover profiles?
-tailscale switch <profile> && tailscale logout   # once per stale profile
-```
-
-and enroll again. Until an old device logs out it keeps retrying with the
-previous server's key, which the Headscale log shows as
-`noise handshake failed: decrypting machine key`.
+If `hub-state` is lost or deleted, the old `9router` node is orphaned and its
+name is taken. Delete the node on the control plane, mint a new key (Step 1),
+put it in `TS_AUTHKEY` and redeploy.
 
 > **The HTTPS gap:** Headscale cannot issue per-node certificates, so 9Router
 > is served as plain HTTP inside WireGuard and `AUTH_COOKIE_SECURE` is `false`.
-> On the wire it is TLS to Cloudflare or Traefik, wrapping WireGuard, wrapping
-> HTTP. CLI tools accept `http://` base URLs. If an IDE insists on `https://`,
-> run a local terminator on that machine:
+> On the wire it is TLS to Cloudflare, wrapping WireGuard, wrapping HTTP. CLI
+> tools accept `http://` base URLs. If an IDE insists on `https://`, run a
+> local terminator on that machine:
 >
 > ```bash
-> caddy reverse-proxy --from localhost:8443 --to http://100.64.0.1 --internal-certs
+> caddy reverse-proxy --from localhost:8443 --to http://9router.mesh.internal --internal-certs
 > ```
 
 ---
@@ -669,7 +639,7 @@ From a client machine, against your mode's base URL:
 ```bash
 ./verify.sh https://9router.<your-tailnet>.ts.net   # Tailscale
 ./verify.sh http://127.0.0.1:20128                  # SSH, tunnel up
-./verify.sh http://100.64.0.1                       # Headscale, router mesh IP
+./verify.sh http://9router.mesh.internal          # Headscale, from a mesh device
 ```
 
 Expected: `/v1/models` returns 401, `/api/mcp/probe` returns 403, `/api/settings`
@@ -687,7 +657,7 @@ On the VPS, confirm what is published to the host:
 ss -tlnp | grep -E '20128|8787'
 # Tailscale mode:  no output.
 # SSH mode:        127.0.0.1:20128 only.
-# Headscale mode:  no output (nothing published).
+# Headscale mode:  no output (nothing published, nothing public in this stack).
 ```
 
 ## Post-install: connect your CLI and IDE
@@ -702,7 +672,7 @@ ss -tlnp | grep -E '20128|8787'
 Point clients at `<base-url>/v1` with that API key. Claude Code:
 
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:20128     # or https://9router.<tailnet>.ts.net, or http://100.64.0.1
+export ANTHROPIC_BASE_URL=http://127.0.0.1:20128     # or https://9router.<tailnet>.ts.net, or http://9router.mesh.internal
 export ANTHROPIC_AUTH_TOKEN=<9router key>
 ```
 
@@ -770,14 +740,12 @@ Dokploy Stop halts the containers; volumes persist.
 |---|---|
 | `9router-data` | `db/data.sqlite`, provider OAuth tokens, API keys, `jwt-secret`, certs, backups |
 | `tailscale-state` | Tailscale mode: node identity, serve config, TLS certificate |
-| `sidecar-state` | Headscale mode: router node identity |
-| `headscale-data` | Headscale mode: control plane database, noise and DERP private keys |
-| `router-key` | Headscale mode: the router's one-time key until it registers |
+| `hub-state` | Headscale mode: the sidecar's identity on the control plane |
 
 Start returns the same configuration, and in Tailscale mode the same hostname
-and certificate. The auth key is consumed only on first run. In Headscale
-mode, the Headscale database and keys persist, so the control plane survives
-restarts without re-initialization.
+and certificate. The auth key is consumed only on first run, and in Headscale
+mode the sidecar keeps its identity in `hub-state`, so restarts need no new
+key. The control plane's own database and keys are its to back up.
 
 Do not delete these volumes. `9router-data` is your entire configuration; if
 `JWT_SECRET` were ever unset, it would also hold the auto-generated secret.
@@ -785,9 +753,9 @@ Do not delete these volumes. `9router-data` is your entire configuration; if
 **Switching modes:** Change **Compose Path** and redeploy. All three files
 declare a `9router-data` volume with the same name, so within one Dokploy
 project your database, provider connections, and API keys carry across. Set
-`TS_AUTHKEY` for Tailscale mode, or `HEADSCALE_DOMAIN` for Headscale mode (the
-router key is generated automatically). Run `verify.sh` again against the new base
-URL.
+`TS_AUTHKEY` (a `tskey-auth-` key) for Tailscale mode, or `HUB_DOMAIN` and a
+`TS_AUTHKEY` (`hskey-auth-`) for Headscale mode. Run `verify.sh`
+again against the new base URL.
 
 ## Contents
 
@@ -795,7 +763,7 @@ URL.
 | --- | --- |
 | `docker-compose.yml` | Tailscale mode: sidecar, 9Router, Headroom |
 | `docker-compose.ssh.yml` | SSH mode: 9Router bound to host loopback, Headroom |
-| `docker-compose.headscale.yml` | Headscale mode: Headscale (with access policy), sidecar, 9Router, Headroom |
+| `docker-compose.headscale.yml` | Headscale mode: sidecar that joins your Headscale control plane, 9Router, Headroom |
 | `serve.json` | `tailscale serve` config (Tailscale mode), mounted via Dokploy |
 | `.env.example` | The required secrets |
 | `verify.sh` | Post-deploy assertions that privileges did not leak |
@@ -810,9 +778,7 @@ URL.
   have first-class clients
 - **SSH mode**: SSH access to the VPS, and `autossh` if you want the tunnel to
   stay up unattended
-- **Headscale mode**: a domain name for the Headscale control plane (Traefik
-  provides TLS, Cloudflare's proxy is fine), and the Tailscale client on each
-  machine pointed at your Headscale server
+- **Headscale mode**: a running Headscale control plane, and the Tailscale client on each machine signed in to it
 
 ## Trade-offs
 
@@ -820,14 +786,15 @@ In Tailscale mode, every device that uses 9Router must be on your tailnet. For
 a single-operator setup that is a small cost, but if you need access from a
 machine where you cannot install Tailscale, use SSH mode instead.
 
-In Headscale mode, you run and maintain a control plane + DERP relay. It is
-lightweight, but it is another public-facing service and another thing to keep
-up. Because every client relays through the embedded DERP server, traffic to
-9Router stops if Headscale stops; on the same VPS that is one failure domain
-rather than two. You also get no per-node TLS certificate, so 9Router is HTTP
-inside WireGuard and `AUTH_COOKIE_SECURE` is `false`. Clients that insist on an
-`https://` base URL need a local terminator. Use this mode only when
-Tailscale's hosted control plane is filtered.
+In Headscale mode, 9Router depends on the hub. This stack adds no public
+service, but a new device or a new sidecar registration needs the hub up, and
+because clients relay over HTTPS (UDP is never used), relayed traffic stops if
+the hub and its relays do. You also get no per-node TLS certificate, so
+9Router is HTTP inside WireGuard and `AUTH_COOKIE_SECURE` is `false`. Clients
+that insist on an `https://` base URL need a local terminator. The hub is a
+high-value target and one more thing to keep up, but it is shared by every
+private app, so that cost is paid once. Use this mode only when Tailscale's
+hosted control plane is filtered.
 
 In SSH mode, the tunnel is a moving part. If it drops, clients get connection
 refused rather than a graceful error. There is also no TLS for clients that

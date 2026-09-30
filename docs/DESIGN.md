@@ -61,8 +61,8 @@ volume, provided it is not exposed publicly.
 | Cloudflare Tunnel + Access | Rejected. IDEs cannot carry Access identity, so `/v1` needs a bypass rule and reverts to API-key-only. Decisive objection: TLS terminates at Cloudflare's edge, so prompts, source, and tokens transit their infrastructure in plaintext. |
 | Tailscale installed on the host | Rejected. Adds a root daemon and rewrites `/etc/resolv.conf` on a production server. |
 | **Tailscale as a sidecar container** | **Chosen as the default.** |
-| **SSH local port forward** | **Chosen as the fallback**, for networks where Tailscale is filtered. |
-| **Headscale (self-hosted control plane)** | **Chosen as the second fallback**, for networks where Tailscale is filtered and a mesh is preferred over per-machine tunnels. |
+| **SSH local port forward** | **Chosen as an alternative access mode**, for networks where Tailscale is filtered and a mesh VPN is not wanted. |
+| **Headscale (your own central control plane)** | **Chosen as an alternative access mode**, for networks where Tailscale is filtered and a mesh is preferred over per-machine tunnels. |
 
 The deciding argument: in every publicly-exposed option, `/v1` must stay
 reachable by clients that authenticate with a bearer token alone, so no
@@ -86,16 +86,17 @@ SSH mode, two containers:
 client ──SSH──> [vps 127.0.0.1:20128] ──bridge──> [9router] ──> [headroom :8787]
 ```
 
-Headscale mode, four containers:
+Headscale mode, three containers, joining your own Headscale control plane:
 
 ```
-device ──HTTPS 443 (DERP)──> [headscale] ──> [sidecar :80] ──bridge──> [9router :20128] ──> [headroom :8787]
+device ──WireGuard, HTTPS 443 relay──> [mesh] ──> [sidecar :80] ──bridge──> [9router :20128] ──> [headroom :8787]
 ```
 
 None of the three publishes a 9Router port reachable from the internet, creates
 a Traefik route for 9Router, or needs a public DNS record for 9Router. Headscale
-mode adds one public service - the Headscale control plane - but 9Router itself
-stays private.
+mode adds no public service either: the control plane, its policy, keys and
+relays live once, centrally, outside this stack, which contains only the
+sidecar.
 
 ### Namespace sharing
 
@@ -106,7 +107,7 @@ resolver configuration, firewall, and Docker's iptables chains untouched.
 Deleting the stack leaves nothing behind.
 
 For reference, a host-level install would have touched: addresses from
-`100.64.0.0/10` (no overlap with Docker's ranges), MagicDNS rewriting
+Tailscale's CGNAT range (no overlap with Docker's ranges), MagicDNS rewriting
 `/etc/resolv.conf`, and new `ts-input` / `ts-forward` / `ts-postrouting`
 firewall chains. The default route would have been unaffected unless an exit
 node was configured. The sidecar makes all of that moot.
@@ -204,28 +205,29 @@ design was trying to keep clean.
 
 Headscale was later **un-rejected** and added as a third access mode, for users
 who need a mesh (not per-machine tunnels) and whose network filters Tailscale.
-The objections were addressed as follows:
+The control plane is a central hub shared by every private app, so 9Router is
+only a client of it. The objections were addressed as follows (points about
+the control plane describe that hub):
 
 - **No HTTPS serve**: 9Router is HTTP inside WireGuard on port 80. Clients that
   require `https://` need a local TLS terminator. `AUTH_COOKIE_SECURE` is
   `false`, matching SSH mode.
-- **Self-hosted DERP**: the embedded relay is used with `urls: []`, so
+- **Self-hosted DERP**: the hub's own relays are used, with `urls: []`, so
   Tailscale's public relays on `*.tailscale.com` are never contacted. STUN is
   configured but UDP 3478 is not published, so every client relays over
   HTTPS/443. Measured through Cloudflare's proxy from a test node on the same
   host: control and DERP both pass, `UDP: false`, 13 to 18 ms to the router.
-- **New public-facing control plane**: accepted. Its gRPC API listens on
-  loopback only. Enrollment needs a single-use key that expires in an hour,
-  the router's key is never printed, and the access policy confines devices to
-  `tcp/80` on the router plus ICMP between devices, so an enrolled rogue device
-  gains the same thing a legitimate one has: an address that still demands
-  9Router's API key, and the ability to ping.
-- **Stale devices**: Tailscale clients keep their last network map, and drop an
-  empty peer list as "no change". Every device's peers include the router,
-  which is never removed, so the list is never empty and removals arrive as
-  removals. Devices see each other through an ICMP-only rule, which gives the
-  operator a full device list without opening TCP or UDP between them. A replaced control plane still needs `tailscale logout` on every
-  old client.
+- **New public-facing control plane**: accepted, but not in this stack any
+  more, and paid once for all apps. Its gRPC API listens on loopback only.
+  Enrollment needs a single-use key that expires in an hour. The hub's policy
+  is default deny and confines the devices of user `owner` to `tcp/80` on
+  `tag:nine-router` plus ICMP between devices, so an enrolled rogue device gains
+  the same thing a legitimate one has: an address that still demands 9Router's
+  API key, and the ability to ping. Tags are applied only by the administrator
+  through a tagged key, never chosen by the sidecar.
+- **Dependency**: 9Router in this mode needs the hub for new registrations and
+  for relayed traffic. Established direct paths survive a hub outage; relayed
+  paths do not, since UDP is never used.
 
 Three moving parts to replace one tunnel - but for users who need a mesh and
 cannot reach Tailscale's hosted control plane, it is the right trade.
@@ -269,13 +271,16 @@ redeploy.
 | --- | --- | --- |
 | `9router-data` → `/app/data` | `db/data.sqlite`, provider OAuth tokens, API keys, `jwt-secret`, certificates, backups | the entire configuration |
 | `tailscale-state` → `/var/lib/tailscale` | node identity, serve config, TLS certificate | Tailscale mode: same hostname and certificate after restart |
-| `sidecar-state` → `/var/lib/tailscale` | router node identity | Headscale mode: no re-registration after restart |
-| `headscale-data` → `/var/lib/headscale` | control plane database, noise and DERP private keys | Headscale mode: control plane survives restarts |
-| `router-key` → `/router` | the router's one-time key | Headscale mode: present only until the router registers |
+| `hub-state` → `/var/lib/tailscale` | sidecar node identity on the control plane | Headscale mode: no re-registration after restart |
 
-The auth key is consumed on first run only. `--advertise-tags=tag:nine-router`
-disables key expiry for the node, so a stack left stopped for months still
-restarts cleanly.
+The auth key is consumed on first run only. In Tailscale mode
+`--advertise-tags=tag:nine-router` disables key expiry for the node; in Headscale mode the control
+plane's tagged key does. Either way a stack left stopped for months still restarts cleanly.
+
+In Headscale mode `TS_AUTHKEY` is required by the compose file even after the
+first start (`${TS_AUTHKEY:?...}`). A missing key then fails the deploy instead of silently starting
+a sidecar that cannot register; the spent value stays in place and is ignored
+because `TS_AUTH_ONCE` finds an identity in `hub-state`.
 
 ## Updates
 
@@ -294,7 +299,7 @@ Accepted risk: tracking `:latest` with an unattended redeploy means an upstream
 compromise reaches the provider OAuth tokens without review. Mitigation if that
 becomes unacceptable: pin a version tag and delete the scheduled job. The
 Headscale compose file already does this; its images are pinned and updated by
-hand.
+hand (the sidecar image stays on the Tailscale line the hub tests).
 
 ## Verification
 
